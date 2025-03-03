@@ -177,6 +177,20 @@ namespace Webb
                 DirectoryInfo eventRoot = new DirectoryInfo("events/" + eventManager.Event.ID.ToString());
                 switch (action)
                 {
+                    case "races":
+                        if (parameters.Length > 0)
+                        {
+                            string raceId = parameters[0];
+                            string raceFilePath = Path.Combine(eventRoot.FullName, raceId, "Race.json");
+                            if (File.Exists(raceFilePath))
+                            {
+                                context.Response.ContentType = "application/json";
+                                return File.ReadAllBytes(raceFilePath);
+                            }
+                            context.Response.StatusCode = 404;
+                            return Encoding.ASCII.GetBytes("Race not found");
+                        }
+                        break;
                     case "events":
                         string target = string.Join('\\', requestPath);
 

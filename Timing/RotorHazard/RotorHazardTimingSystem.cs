@@ -139,7 +139,7 @@ namespace Timing.RotorHazard
 
         private const int MaxTimeSamples = 20;
 
-        private DateTime rotorhazardStart;
+        public DateTime RotorhazardStart;
 
         private RaceStartPilots raceStartPilots;
 
@@ -152,6 +152,9 @@ namespace Timing.RotorHazard
             }
         }
 
+        public delegate void RaceMarshalEventDelegate(ITimingSystem timingSystem, RaceMarshalData marshalData);
+        public event RaceMarshalEventDelegate OnRaceMarshalEvent;
+        
         public RotorHazardTimingSystem()
         {
             settings = new RotorHazardSettings();
@@ -191,6 +194,7 @@ namespace Timing.RotorHazard
                             {
                                 Logger.TimingLog.Log(this, "Load All");
                             });
+                            socket.On("ts_race_marshal", OnRaceMarshal);
 
                             connected = true;
                             Logger.TimingLog.Log(this, "Connected");
@@ -438,7 +442,7 @@ namespace Timing.RotorHazard
 
             StageReady stageReady = response.GetValue<StageReady>();
             TimeSpan time = TimeSpan.FromSeconds(stageReady.pi_starts_at_s); ;
-            rotorhazardStart = serverEpoch + time;
+            RotorhazardStart = serverEpoch + time;
         }
 
         private void OnLapData(SocketIOResponse response)
@@ -447,7 +451,7 @@ namespace Timing.RotorHazard
             
             Logger.TimingLog.Log(this, "LapData", lapData);
 
-            DateTime passingTime = rotorhazardStart + TimeSpan.FromSeconds(lapData.lap_time);
+            DateTime passingTime = RotorhazardStart + TimeSpan.FromSeconds(lapData.lap_time);
             OnDetectionEvent?.Invoke(this, lapData.frequency, passingTime, lapData.peak_rssi);
         }
 
@@ -511,7 +515,7 @@ namespace Timing.RotorHazard
                 }
             }
 
-            time = rotorhazardStart;
+            time = RotorhazardStart;
 
             return detecting;
         }
@@ -563,6 +567,22 @@ namespace Timing.RotorHazard
                 };
 
                 yield return rssi;
+            }
+        }
+
+        private void OnRaceMarshal(SocketIOResponse response)
+        {
+            try
+            {
+                RaceMarshalData marshalData = response.GetValue<RaceMarshalData>();
+                Logger.TimingLog.Log(this, "Received race marshal data for pilot: " + marshalData.callsign);
+
+                // Simply invoke the event and let RaceManager handle the database operations
+                OnRaceMarshalEvent?.Invoke(this, marshalData);
+            }
+            catch (Exception ex)
+            {
+                Logger.TimingLog.LogException(this, ex);
             }
         }
     }

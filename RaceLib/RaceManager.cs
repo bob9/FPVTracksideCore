@@ -9,6 +9,7 @@ using System.Threading.Channels;
 using System.Threading.Tasks;
 using System.Timers;
 using Timing;
+using Timing.RotorHazard;
 using Tools;
 
 namespace RaceLib
@@ -278,6 +279,13 @@ namespace RaceLib
             TimingSystemManager = new TimingSystemManager(eventManager.Profile);
             TimingSystemManager.DetectionEvent += OnDetection;
             TimingSystemManager.OnConnected += OnTimingSystemReconnect;
+
+            // Add handler for marshal events
+            foreach (var system in TimingSystemManager.TimingSystems.OfType<RotorHazardTimingSystem>())
+            {
+                system.OnRaceMarshalEvent += OnRaceMarshal;
+            }
+
             races = new List<Race>();
         }
 
@@ -1610,6 +1618,15 @@ namespace RaceLib
                 return races.Where(r => r.Valid && !r.Ended && r.PilotChannels.Any() && r.RaceOrder > afterThisRace.RaceOrder && r.Round.Order >= afterThisRace.Round.Order).OrderBy(r => r.Round.Order).ThenBy(r => r.RaceOrder).FirstOrDefault();
             }
         }
+        
+        public Race GetRaceByRaceId(Guid raceId)
+        {
+            lock (races)
+            {
+                IEnumerable<Race> raceRecords = races.Where(r => r.ID == raceId);
+                return raceRecords.FirstOrDefault();
+            }
+        }
 
         public Race GetPrevRace()
         {
@@ -2119,6 +2136,94 @@ namespace RaceLib
                     EventManager.ResultManager.SaveResults(race);
                 }
                 return result;
+            }
+        }
+
+        private void OnRaceMarshal(ITimingSystem timingSystem, RaceMarshalData marshalData)
+        {
+            try
+            {
+                Logger.RaceLog.Log(this, "Processing race marshal data for pilot: " + marshalData.callsign);
+
+                // Find the race
+                Race race = null;
+                if (CurrentRace?.ID == marshalData.race_id)
+                {
+                    race = CurrentRace;
+                }
+                else
+                {
+                    race = GetRaceByRaceId(marshalData.race_id);
+                    if (race == null)
+                    {
+                        Logger.RaceLog.Log(this, "Could not find race with ID: " + marshalData.race_id);
+                        return;
+                    }
+                }
+
+                // Find the pilot
+                PilotChannel pilotChannel = race.PilotChannels.FirstOrDefault(pc => 
+                    pc.Pilot != null && pc.Pilot.ID.ToString() == marshalData.ts_pilot_id);
+
+                if (pilotChannel == null)
+                {
+                    Logger.RaceLog.Log(this, "Could not find pilot for race marshal data");
+                    return;
+                }
+
+                // First, mark all existing laps for this pilot as invalid
+                lock (race.Detections)
+                {
+                    foreach (var detection in race.Detections.Where(d => d.Pilot == pilotChannel.Pilot))
+                    {
+                        detection.Valid = false;
+                        detection.ValidityType = Detection.ValidityTypes.ManualOverride;
+                    }
+                }
+
+                lock (race.Laps)
+                {
+                    race.Laps.RemoveAll(l => l.Pilot == pilotChannel.Pilot);
+                }
+
+                // Now add the new laps in order
+
+                int lap = 0;
+                foreach (var marshalLap in marshalData.laps.OrderBy(l => l.lap_time))
+                {
+                    if (!marshalLap.deleted)
+                    {
+                        lap++;
+                        // Convert the lap time to a DateTime
+                        DateTime lapTime = (timingSystem as RotorHazardTimingSystem).RotorhazardStart + TimeSpan.FromSeconds(marshalLap.lap_time);
+                        
+                        // Create a detection for this lap with IsLapEnd=true since these are complete laps
+                        Detection detection = new Detection(TimingSystemType.RotorHazard, 0, pilotChannel.Pilot, 
+                            pilotChannel.Channel, lapTime, lap, true, 0);
+                        
+                        AddLap(detection);
+                        // race.Detections.Add(detection);
+                        // using (IDatabase db = DatabaseFactory.Open(race.Event.ID))
+                        // {
+                        //     // Add the detection and create the lap
+                        //     race AddLap(detection, db);
+                        // }
+                    }
+                }
+
+                // Force a recalculation of the race results
+                using (IDatabase db = DatabaseFactory.Open(race.Event.ID))
+                {
+                    db.Update(race);
+                }
+
+                // Notify that the race has been updated
+                OnLapsRecalculated?.Invoke(race);
+                OnRaceChanged?.Invoke(race);
+            }
+            catch (Exception ex)
+            {
+                Logger.RaceLog.LogException(this, ex);
             }
         }
 

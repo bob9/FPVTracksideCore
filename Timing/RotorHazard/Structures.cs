@@ -159,7 +159,7 @@ namespace Timing.RotorHazard
         public string ts_pilot_id { get; set; }
         public List<RaceMarshalLap> laps { get; set; }
     }
-
+    
     public struct RaceMarshalLap
     {
         public bool deleted { get; set; }

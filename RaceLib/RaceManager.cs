@@ -1420,6 +1420,13 @@ namespace RaceLib
             }
         }
 
+        public void AddManualLapWithRace(Race currentRace, Pilot pilot, DateTime time, int lapNo)
+        {
+            Channel c = currentRace.GetChannel(pilot);
+            EventManager.RaceManager.AddLap(new Detection(TimingSystemType.Manual, 0, pilot, c, time, lapNo, false, 0));
+            EventManager.RaceManager.RecalcuateLaps(pilot, currentRace);
+        }
+
         public void AddManualLap(Pilot pilot, DateTime time)
         {
             Race currentRace = CurrentRace;
@@ -2174,6 +2181,7 @@ namespace RaceLib
                 // First, mark all existing laps for this pilot as invalid
                 lock (race.Detections)
                 {
+                    //race.Detections.Clear();
                     foreach (var detection in race.Detections.Where(d => d.Pilot == pilotChannel.Pilot))
                     {
                         detection.Valid = false;
@@ -2184,30 +2192,32 @@ namespace RaceLib
                 lock (race.Laps)
                 {
                     race.Laps.RemoveAll(l => l.Pilot == pilotChannel.Pilot);
+   
                 }
 
                 // Now add the new laps in order
-
-                int lap = 0;
+               
+                int lap = 1;
                 foreach (var marshalLap in marshalData.laps.OrderBy(l => l.lap_time))
                 {
                     if (!marshalLap.deleted)
                     {
-                        lap++;
                         // Convert the lap time to a DateTime
-                        DateTime lapTime = (timingSystem as RotorHazardTimingSystem).RotorhazardStart + TimeSpan.FromSeconds(marshalLap.lap_time);
+                        DateTime lapTime = race.Start + TimeSpan.FromMilliseconds(marshalLap.lap_time);
                         
                         // Create a detection for this lap with IsLapEnd=true since these are complete laps
-                        Detection detection = new Detection(TimingSystemType.RotorHazard, 0, pilotChannel.Pilot, 
-                            pilotChannel.Channel, lapTime, lap, true, 0);
+                        //Detection detection = new Detection(TimingSystemType.Manual, 0, pilotChannel.Pilot, 
+                        //    pilotChannel.Channel, lapTime, lap, true, 0);
                         
-                        AddLap(detection);
+                        //AddLap(detection);
+                        AddManualLapWithRace(race, pilotChannel.Pilot, lapTime, lap);
                         // race.Detections.Add(detection);
                         // using (IDatabase db = DatabaseFactory.Open(race.Event.ID))
                         // {
                         //     // Add the detection and create the lap
                         //     race AddLap(detection, db);
                         // }
+                        lap++;
                     }
                 }
 

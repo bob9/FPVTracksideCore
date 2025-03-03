@@ -459,12 +459,38 @@ namespace RaceLib
                 if (!toRemove.Any())
                     return false;
 
+                // Remove from our in-memory collection first
                 Results.RemoveAll(r => toRemove.Contains(r));
 
-                using (IDatabase db = DatabaseFactory.Open(EventManager.EventId))
+                try
                 {
-                    db.Delete(toRemove);
+                    // Delete each result individually to avoid batch deletion issues
+                    using (IDatabase db = DatabaseFactory.Open(EventManager.EventId))
+                    {
+                        foreach (var result in toRemove)
+                        {
+                            // Clear references that might cause issues
+                            result.Race = null;
+                            result.Pilot = null;
+                            result.Round = null;
+                            result.Event = null;
+                            
+                            // Delete the result
+                            bool success = db.Delete(result);
+                            if (!success)
+                            {
+                                Logger.RaceLog.Log(this, $"Failed to delete Result {result.ID}", Logger.LogType.Error);
+                            }
+                        }
+                    }
                 }
+                catch (Exception ex)
+                {
+                    Logger.RaceLog.LogException(this, ex);
+                    // Even if deletion fails, we've already removed from memory
+                    // so we return true to allow the process to continue
+                }
+                
                 return true;
             }
         }

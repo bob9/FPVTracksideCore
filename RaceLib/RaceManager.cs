@@ -2178,53 +2178,65 @@ namespace RaceLib
                     return;
                 }
 
-                // First, mark all existing laps for this pilot as invalid
-                lock (race.Detections)
-                {
-                    //race.Detections.Clear();
-                    foreach (var detection in race.Detections.Where(d => d.Pilot == pilotChannel.Pilot))
-                    {
-                        detection.Valid = false;
-                        detection.ValidityType = Detection.ValidityTypes.ManualOverride;
-                    }
-                }
-
-                lock (race.Laps)
-                {
-                    race.Laps.RemoveAll(l => l.Pilot == pilotChannel.Pilot);
-   
-                }
-
-                // Now add the new laps in order
-               
-                int lap = 1;
-                foreach (var marshalLap in marshalData.laps.OrderBy(l => l.lap_time))
-                {
-                    if (!marshalLap.deleted)
-                    {
-                        // Convert the lap time to a DateTime
-                        DateTime lapTime = race.Start + TimeSpan.FromMilliseconds(marshalLap.lap_time);
-                        
-                        // Create a detection for this lap with IsLapEnd=true since these are complete laps
-                        //Detection detection = new Detection(TimingSystemType.Manual, 0, pilotChannel.Pilot, 
-                        //    pilotChannel.Channel, lapTime, lap, true, 0);
-                        
-                        //AddLap(detection);
-                        AddManualLapWithRace(race, pilotChannel.Pilot, lapTime, lap);
-                        // race.Detections.Add(detection);
-                        // using (IDatabase db = DatabaseFactory.Open(race.Event.ID))
-                        // {
-                        //     // Add the detection and create the lap
-                        //     race AddLap(detection, db);
-                        // }
-                        lap++;
-                    }
-                }
-
-                // Force a recalculation of the race results
+                // Use a single database transaction for all operations
                 using (IDatabase db = DatabaseFactory.Open(race.Event.ID))
                 {
+                    // First, mark all existing laps for this pilot as invalid
+                    lock (race.Detections)
+                    {
+                        foreach (var detection in race.Detections.Where(d => d.Pilot == pilotChannel.Pilot))
+                        {
+                            detection.Valid = false;
+                            detection.ValidityType = Detection.ValidityTypes.ManualOverride;
+                        }
+                        // Update the race with the modified detections
+                        db.Update(race);
+                    }
+
+                    // Remove all laps for this pilot
+                    lock (race.Laps)
+                    {
+                        race.Laps.RemoveAll(l => l.Pilot == pilotChannel.Pilot);
+                        // Update the race with the modified laps
+                        db.Update(race);
+                    }
+
+                    // Now add the new laps in order
+                    int lap = 1;
+                    foreach (var marshalLap in marshalData.laps.OrderBy(l => l.lap_time))
+                    {
+                        if (!marshalLap.deleted)
+                        {
+                            // Convert the lap time to a DateTime
+                            DateTime lapTime = race.Start + TimeSpan.FromMilliseconds(marshalLap.lap_time);
+                            
+                            // Create a detection for this lap
+                            Detection detection = new Detection(
+                                TimingSystemType.Manual, 
+                                0, 
+                                pilotChannel.Pilot, 
+                                pilotChannel.Channel, 
+                                lapTime, 
+                                lap, 
+                                true, // IsLapEnd = true since these are complete laps
+                                0);
+                            
+                            // Add the detection to the race
+                            race.Detections.Add(detection);
+                            
+                            // Create and add the lap
+                            Lap newLap = new Lap(detection);
+                            race.Laps.Add(newLap);
+                            
+                            lap++;
+                        }
+                    }
+                    
+                    // Update the race with the new laps and detections
                     db.Update(race);
+                    
+                    // Clear existing results for this race before recalculating
+                    EventManager.ResultManager.ClearPoints(race);
                 }
 
                 // Notify that the race has been updated

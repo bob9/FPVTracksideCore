@@ -368,7 +368,7 @@ namespace RaceLib
         {
             lock (races)
             {
-                return races.Where(r =>  r.Valid &&r.Round == round).Select(r => r.RaceNumber).OrderBy(i => i);
+                return races.Where(r => r.Valid && r.Round == round).Select(r => r.RaceNumber).OrderBy(i => i);
             }
         }
 
@@ -460,7 +460,7 @@ namespace RaceLib
                 {
                     AutoAssignNumbers(currentRace);
                 }
-                
+
                 OnPilotAdded?.Invoke(pc);
                 return true;
             }
@@ -623,7 +623,7 @@ namespace RaceLib
         {
             return StartRaceInLessThan(EventManager.Event.MinStartDelay, EventManager.Event.MaxStartDelay);
         }
-                        
+
         public bool StartStaggered(TimeSpan delay, Action<PilotChannel> onStart)
         {
             if (!preRaceStartMutex.WaitOne(1000))
@@ -731,10 +731,10 @@ namespace RaceLib
                 PreRaceStartDelay = false;
                 return false;
             }
-            
+
             if (currentRace.Type.UsesTimingSystem())
             {
-                if(!TimingSystemManager.IsDetecting)
+                if (!TimingSystemManager.IsDetecting)
                 {
                     PreRaceStartDelay = false;
                     return false;
@@ -942,7 +942,7 @@ namespace RaceLib
             Logger.RaceLog.LogCall(this, CurrentRace);
 
             if (race == null)
-                return; 
+                return;
 
 
             race.Event = EventManager.Event;
@@ -1876,7 +1876,7 @@ namespace RaceLib
 
             return false;
         }
-        
+
         private void OnTimingSystemReconnect(int count)
         {
             Logger.RaceLog.LogCall(this, "Timing system reconnect. Count: " + count);
@@ -2195,20 +2195,24 @@ namespace RaceLib
                     Logger.RaceLog.Log(this, "Could not find pilot for race marshal data");
                     return;
                 }
- 
-                var laps  = race.GetLaps(l => true == true).ToArray();
 
-                foreach (var lap in laps)
+                var laps = race.GetLaps(l => true == true).ToArray();
+
+
+
+                //for (var lap in laps)
+                for (int i = laps.Count() - 1; i >= 0; i--)
                 {
-                    if (lap.Pilot == pilotChannel.Pilot)
+                    if (laps[i].Pilot == pilotChannel.Pilot)
                     {
-                        DisqualifyLap(lap, Detection.ValidityTypes.ManualOverride);
-                       
-
-                        //race.Laps.Remove(lap);
+                        DisqualifyLap(laps[i], Detection.ValidityTypes.ManualOverride);
+                        using (IDatabase db = DatabaseFactory.Open(EventManager.EventId))
+                        {
+                            db.Delete(laps[i]);
+                            race.Laps.Remove(laps[i]);
+                        }
                     }
                 }
-
 
                 var previousLapTime = race.Start;
 
@@ -2224,7 +2228,7 @@ namespace RaceLib
                         lapNumber++;
                     }
                 }
-                EventManager.ResultManager.SaveResults(race);
+                EventManager.RaceManager.RecalcuateLaps(pilotChannel.Pilot, race);
 
             }
             catch (Exception ex)

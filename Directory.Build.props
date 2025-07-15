@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project>
   <PropertyGroup>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <!-- Common version for all projects -->
     <Version>2.0.68.1</Version>
     <AssemblyVersion>2.0.68.1</AssemblyVersion>

@@ -1,0 +1,65 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches: [ master, main, develop ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '6.0.x'
+    
+    - name: Restore dependencies
+      run: dotnet restore "FPVTrackside - Core.sln"
+    
+    - name: Build Windows solution
+      run: dotnet build "FPVTrackside - Core.sln" --configuration Release --no-restore
+    
+    - name: Test
+      run: dotnet test "FPVTrackside - Core.sln" --configuration Release --no-build --verbosity normal --collect:"XPlat Code Coverage"
+
+  build-macos:
+    runs-on: macos-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '6.0.x'
+    
+    - name: Restore dependencies
+      run: dotnet restore "FPVMacside - Core.sln"
+    
+    - name: Build macOS solution
+      run: dotnet build "FPVMacside - Core.sln" --configuration Release --no-restore
+    
+    - name: Test
+      run: dotnet test "FPVMacside - Core.sln" --configuration Release --no-build --verbosity normal --collect:"XPlat Code Coverage"
+
+  build-cross-platform:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '6.0.x'
+    
+    - name: Restore dependencies (macOS solution)
+      run: dotnet restore "FPVMacside - Core.sln"
+    
+    - name: Build macOS solution on Linux
+      run: dotnet build "FPVMacside - Core.sln" --configuration Release --no-restore 

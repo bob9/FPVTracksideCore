@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <PropertyGroup>
+    <!-- Common version for all projects -->
+    <Version>2.0.68.1</Version>
+    <AssemblyVersion>2.0.68.1</AssemblyVersion>
+    <FileVersion>2.0.68.1</FileVersion>
+    
+    <!-- Common build settings -->
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <WarningLevel>4</WarningLevel>
+    
+    <!-- Common metadata -->
+    <Company>FPVTrackside</Company>
+    <Product>FPVTrackside Core</Product>
+    <Copyright>Copyright © FPVTrackside</Copyright>
+    <Description>FPV drone racing timing and video software</Description>
+    
+    <!-- Build optimizations -->
+    <DebugType Condition="'$(Configuration)' == 'Release'">pdbonly</DebugType>
+    <DebugType Condition="'$(Configuration)' == 'Debug'">full</DebugType>
+    
+    <!-- Reproducible builds -->
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+    
+    <!-- Package settings for libraries -->
+    <GeneratePackageOnBuild Condition="'$(OutputType)' == 'Library'">false</GeneratePackageOnBuild>
+    <IncludeSymbols Condition="'$(OutputType)' == 'Library'">true</IncludeSymbols>
+    <SymbolPackageFormat Condition="'$(OutputType)' == 'Library'">snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+  
+  <!-- Common package references for all projects -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="1.1.1" PrivateAssets="All" Condition="'$(CI)' == 'true'" />
+  </ItemGroup>
+  
+  <!-- Platform-specific settings -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net6.0-windows'">
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
+</Project> 

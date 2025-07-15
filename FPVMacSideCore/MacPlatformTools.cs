@@ -61,6 +61,8 @@ namespace FPVMacsideCore
 
         public override bool ThreadedDrawing { get { return false; } }
 
+
+
         public MacPlatformTools()
         {
             Console.WriteLine("Mac Platform Start");
@@ -94,6 +96,29 @@ namespace FPVMacsideCore
             {
                 new FfmpegMediaPlatform.FfmpegMediaFramework()
             };
+
+            // Request camera permissions early in app startup
+            Task.Run(async () =>
+            {
+                try
+                {
+                    Console.WriteLine("Checking camera permissions...");
+                    bool hasPermission = await Tools.MacCameraPermissions.EnsureCameraPermissionAsync();
+                    if (hasPermission)
+                    {
+                        Console.WriteLine("Camera permission granted - USB cameras should be detected");
+                    }
+                    else
+                    {
+                        Console.WriteLine("Camera permission not granted - USB cameras will not be detected");
+                        Console.WriteLine("Please grant camera access in System Preferences > Security & Privacy > Camera");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error during camera permission check: {ex.Message}");
+                }
+            });
         }
 
         private void CopyToHomeDir(DirectoryInfo oldWorkDir)
@@ -395,6 +420,8 @@ namespace FPVMacsideCore
             return objc_msgSend(objc_getClass("NSThread"), sel_registerName("isMainThread")) == (IntPtr)1;
         }
 
+
+
         #region macOS Native Interop
 
         [DllImport("/System/Library/Frameworks/Foundation.framework/Foundation")]
@@ -411,6 +438,9 @@ namespace FPVMacsideCore
 
         [DllImport("/System/Library/Frameworks/Foundation.framework/Foundation")]
         private static extern IntPtr objc_msgSend(IntPtr receiver, IntPtr selector, string arg1);
+
+        [DllImport("/System/Library/Frameworks/Foundation.framework/Foundation")]
+        private static extern IntPtr objc_msgSend(IntPtr receiver, IntPtr selector, IntPtr arg1, IntPtr arg2);
 
         private static IntPtr CreateNSString(string str)
         {

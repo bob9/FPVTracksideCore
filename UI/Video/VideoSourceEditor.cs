@@ -115,6 +115,14 @@ namespace UI.Video
 
             mouseMenu.AddItem("File", AddVideoFile);
             //mouseMenu.AddItem("RTSP URL", AddURL);
+            
+            // Add camera permission request for macOS
+            if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX))
+            {
+                mouseMenu.AddBlank();
+                mouseMenu.AddItem("Request Camera Permission", RequestCameraPermission);
+            }
+            
             mouseMenu.Show(addButton);
         }
 
@@ -144,6 +152,92 @@ namespace UI.Video
                 AddNew(vs);
             };
             GetLayer<PopupLayer>().Popup(tn);
+        }
+
+        private async void RequestCameraPermission()
+        {
+            if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX))
+            {
+                try
+                {
+                    var currentStatus = Tools.MacCameraPermissions.GetCameraPermissionStatus();
+                    
+                    string statusMessage = currentStatus switch
+                    {
+                        Tools.MacCameraPermissions.CameraPermissionStatus.Authorized => "✅ Camera permission is already granted.",
+                        Tools.MacCameraPermissions.CameraPermissionStatus.Denied => "❌ Camera permission was denied. Please grant access in System Preferences > Security & Privacy > Camera.",
+                        Tools.MacCameraPermissions.CameraPermissionStatus.Restricted => "⚠️ Camera access is restricted by system policy.",
+                        Tools.MacCameraPermissions.CameraPermissionStatus.NotDetermined => "📷 Camera permission not yet requested.",
+                        _ => "❓ Unknown camera permission status."
+                    };
+
+                    if (currentStatus == Tools.MacCameraPermissions.CameraPermissionStatus.Authorized)
+                    {
+                        // Already authorized, just show status and refresh
+                        GetLayer<PopupLayer>().PopupMessage(statusMessage);
+                        
+                        // Refresh video sources to show newly detected cameras
+                        RefreshVideoSources();
+                    }
+                    else if (currentStatus == Tools.MacCameraPermissions.CameraPermissionStatus.NotDetermined)
+                    {
+                        // Request permission
+                        bool granted = await Tools.MacCameraPermissions.EnsureCameraPermissionAsync();
+                        
+                        // Show result
+                        string resultMessage = granted 
+                            ? "✅ Camera permission granted! USB cameras should now be detected."
+                            : "❌ Camera permission denied. USB cameras will not be detected.";
+                            
+                        GetLayer<PopupLayer>().PopupMessage(resultMessage);
+                        
+                        if (granted)
+                        {
+                            // Refresh video sources to show newly detected cameras
+                            RefreshVideoSources();
+                        }
+                    }
+                    else
+                    {
+                        // Denied or restricted
+                        string helpMessage = statusMessage + "\n\n" +
+                            "To grant camera access:\n" +
+                            "1. Open System Preferences\n" +
+                            "2. Go to Security & Privacy\n" +
+                            "3. Click the Camera tab\n" +
+                            "4. Check the box next to FPVTrackside";
+                        
+                        GetLayer<PopupLayer>().PopupMessage(helpMessage);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    GetLayer<PopupLayer>().PopupMessage($"❌ Error checking camera permission: {ex.Message}");
+                }
+            }
+        }
+
+        private void RefreshVideoSources()
+        {
+            try
+            {
+                // Reload video manager to detect newly available cameras
+                VideoManager.LoadDevices();
+                
+                // Update the list of available video sources
+                var newSources = VideoManager.GetAvailableVideoSources().ToList();
+                
+                // Log the refresh for debugging
+                Console.WriteLine($"Refreshed video sources - found {newSources.Count} sources");
+                foreach (var source in newSources)
+                {
+                    Console.WriteLine($"  - {source.DeviceName}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error refreshing video sources: {ex.Message}");
+            }
         }
 
         protected override PropertyNode<VideoConfig> CreatePropertyNode(VideoConfig obj, PropertyInfo pi)

@@ -96,6 +96,16 @@ namespace ImageServer
             this.sampleTime = sampleTime;
         }
 
+        public void SetData(byte[] bufferToCopy, long sampleTime, long processCount)
+        {
+            lock (source)
+            {
+                Buffer.BlockCopy(bufferToCopy, 0, source, 0, source.Length);
+            }
+            this.processCount = processCount;
+            this.sampleTime = sampleTime;
+        }
+
         public bool UpdateTexture(FrameTextureSample texture)
         {
             try

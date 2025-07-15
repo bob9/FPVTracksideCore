@@ -663,37 +663,45 @@ namespace UI.Nodes
             {
                 foreach (VideoBounds videoBounds in source.VideoConfig.VideoBounds)
                 {
-                    CamNode node = null;
+                    Node node = null;
                     switch (videoBounds.SourceType)
                     {
                         case SourceTypes.Commentators:
-                            node = new CamNode(source, videoBounds);
-                            node.OnFullScreenRequest += FullScreen;
+                            // Use the same working approach as VideoSourceEditor settings screen
+                            var channelVideoInfo = new ChannelVideoInfo(videoBounds, Channel.None, source);
+                            var commentatorVideoNode = new ChannelVideoMapNode(channelVideoInfo);
+                            node = commentatorVideoNode;
                             commentatorsAndSummary.AddChild(node);
                             break;
 
                         case SourceTypes.Launch:
-                            node = new CamNode(source, videoBounds);
-                            node.OnFullScreenRequest += FullScreen;
-                            node.FrameNode.KeepAspectRatio = false;
-                            node.FrameNode.CropToFit = true;
-                            node.FrameNode.Alignment = RectangleAlignment.Center;
+                            var launchCamNode = new CamNode(source, videoBounds);
+                            launchCamNode.OnFullScreenRequest += FullScreen;
+                            launchCamNode.FrameNode.KeepAspectRatio = false;
+                            launchCamNode.FrameNode.CropToFit = true;
+                            launchCamNode.FrameNode.Alignment = RectangleAlignment.Center;
+                            node = launchCamNode;
                             launchCamsNode.AddChild(node);
                             break;
 
                         case SourceTypes.FinishLine:
-                            node = new CamNode(source, videoBounds);
-                            node.OnFullScreenRequest += FullScreen;
-                            node.FrameNode.KeepAspectRatio = false;
-                            node.FrameNode.CropToFit = true;
-                            node.FrameNode.Alignment = RectangleAlignment.Center;
+                            var finishLineCamNode = new CamNode(source, videoBounds);
+                            finishLineCamNode.OnFullScreenRequest += FullScreen;
+                            finishLineCamNode.FrameNode.KeepAspectRatio = false;
+                            finishLineCamNode.FrameNode.CropToFit = true;
+                            finishLineCamNode.FrameNode.Alignment = RectangleAlignment.Center;
+                            node = finishLineCamNode;
                             finishLineNode.AddChild(node);
                             break;
 
                     }
                     if (node != null)
                     {
-                        node.OnVideoBoundsChange += Node_OnVideoBoundsChange;
+                        // Only add VideoBoundsChange event for CamNode instances
+                        if (node is CamNode camNode)
+                        {
+                            camNode.OnVideoBoundsChange += Node_OnVideoBoundsChange;
+                        }
                     }
                 }
             }

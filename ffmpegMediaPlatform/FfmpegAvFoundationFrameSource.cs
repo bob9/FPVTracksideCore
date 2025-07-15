@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using Tools;
 
 namespace FfmpegMediaPlatform
 {
@@ -40,7 +41,21 @@ namespace FfmpegMediaPlatform
         {
             string name = VideoConfig.DeviceName;
             string index = VideoConfig.ffmpegId;
-            return ffmpegMediaFramework.GetProcessStartInfo("-f avfoundation -framerate 30 -i \"" + index + ":0\" -pix_fmt rgb32 -f rawvideo -");
+            
+            // NATIVE macOS CAMERA PARAMETERS (using camera's actual native format):
+            // -f avfoundation: Use native macOS camera framework
+            // -framerate 30: Standard 30fps
+            // -video_size 1280x720: Standard HD resolution
+            // -i index: Camera device by index
+            // -pix_fmt uyvy422: Camera's true native format (2 bytes per pixel) - no conversion, no override
+            // -f rawvideo: Raw video output format
+            // -: Output to stdout pipe
+            
+            string args = $"-f avfoundation -framerate 30 -video_size 1280x720 -i \"{index}\" -pix_fmt uyvy422 -f rawvideo -";
+            
+            Logger.VideoLog.Log(this, $"FFmpeg args: {args}");
+            Console.WriteLine($"DEBUG: Starting FFmpeg with command: ffmpeg {args}");
+            return ffmpegMediaFramework.GetProcessStartInfo(args);
         }
     }
 }

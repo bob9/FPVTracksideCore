@@ -269,6 +269,8 @@ namespace ImageServer
                 return false;
 
             VideoConfig other = obj as VideoConfig;
+            if (other == null)
+                return false;
 
             if (!string.IsNullOrEmpty(other.FilePath) && other.FilePath == FilePath)
                 return true;
@@ -279,6 +281,10 @@ namespace ImageServer
             if (!string.IsNullOrEmpty(other.MediaFoundationPath) && other.MediaFoundationPath == MediaFoundationPath)
                 return true;
 
+            // Add ffmpegId comparison for Mac cameras using ffmpeg
+            if (!string.IsNullOrEmpty(other.ffmpegId) && other.ffmpegId == ffmpegId)
+                return true;
+
             return false;
         }
 
@@ -287,6 +293,8 @@ namespace ImageServer
             int hash = 17;
             if (DirectShowPath != null) hash += DirectShowPath.GetHashCode();
             if (MediaFoundationPath != null) hash += MediaFoundationPath.GetHashCode();
+            if (ffmpegId != null) hash += ffmpegId.GetHashCode();
+            if (FilePath != null) hash += FilePath.GetHashCode();
 
             return hash;
         }

@@ -35,11 +35,26 @@ namespace FfmpegMediaPlatform
                 {
                     execName = exe;
                 }
+                else
+                {
+                    Console.WriteLine($"DEBUG: ffmpeg binary not found at: {Path.GetFullPath(execName)}");
+                    Console.WriteLine($"DEBUG: Current directory: {Directory.GetCurrentDirectory()}");
+                    Console.WriteLine($"DEBUG: Will try to use ffmpeg from PATH...");
+                    // Keep execName as "ffmpeg" to try system PATH
+                }
+            }
+            else
+            {
+                Console.WriteLine($"DEBUG: Found ffmpeg at: {Path.GetFullPath(execName)}");
             }
 
             IEnumerable<string> devices = GetFfmpegText("-devices");
+            Console.WriteLine($"DEBUG: ffmpeg devices output: {string.Join(", ", devices)}");
+            
             dshow = devices.Any(l => l.Contains("dshow"));
             avfoundation = devices.Any(l => l.Contains("avfoundation"));
+            
+            Console.WriteLine($"DEBUG: dshow support: {dshow}, avfoundation support: {avfoundation}");
 
             GetVideoConfigs();
 
@@ -100,7 +115,9 @@ namespace FfmpegMediaPlatform
             }
             catch (Exception e)
             {
-                Console.WriteLine(e.Message);
+                Console.WriteLine($"DEBUG: Exception in GetFfmpegText: {e.Message}");
+                Console.WriteLine($"DEBUG: ffmpeg executable: {execName}");
+                Console.WriteLine($"DEBUG: ffmpeg args: {args}");
                 return new string[] { };
             }            
         }
@@ -138,6 +155,7 @@ namespace FfmpegMediaPlatform
                 //"[AVFoundation indev @ 0x7fec24704c00] AVFoundation video devices:"
                 //"	[12]	"[AVFoundation indev @ 0x7fb47c004a00] [0] Razer Kiyo Pro"	
                 IEnumerable<string> deviceList = GetFfmpegText("-list_devices true -f avfoundation -i dummy", l => l.Contains("AVFoundation"));
+                Console.WriteLine($"DEBUG: AVFoundation device list: {string.Join(Environment.NewLine, deviceList)}");
 
                 bool inVideo = false;
 
@@ -162,8 +180,14 @@ namespace FfmpegMediaPlatform
                         Match match = reg.Match(deviceLine);
                         if (match.Success)
                         {
-
-                            yield return new VideoConfig { FrameWork = FrameWork.ffmpeg, DeviceName = match.Groups[2].Value, ffmpegId = match.Groups[1].Value };
+                            string deviceName = match.Groups[2].Value;
+                            string deviceId = match.Groups[1].Value;
+                            Console.WriteLine($"DEBUG: Found AVFoundation camera: {deviceName} (ID: {deviceId})");
+                            yield return new VideoConfig { FrameWork = FrameWork.ffmpeg, DeviceName = deviceName, ffmpegId = deviceId };
+                        }
+                        else
+                        {
+                            Console.WriteLine($"DEBUG: AVFoundation device line didn't match regex: {deviceLine}");
                         }
                     }
                 }

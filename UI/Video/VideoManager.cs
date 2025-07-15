@@ -14,6 +14,7 @@ using Microsoft.Xna.Framework.Media;
 using Composition;
 using System.Text.RegularExpressions;
 using UI;
+using FfmpegMediaPlatform;
 using static UI.Video.VideoManager;
 
 namespace UI.Video
@@ -58,6 +59,11 @@ namespace UI.Video
 
         private List<FrameSource> needsInitialize;
         private List<IDisposable> needsDispose;
+        
+        // Add device access tracking and cooldown management
+        private Dictionary<string, DateTime> deviceLastFailTime = new Dictionary<string, DateTime>();
+        private Dictionary<string, FrameSource> deviceActiveFrameSources = new Dictionary<string, FrameSource>();
+        private readonly TimeSpan deviceRetryDelay = TimeSpan.FromSeconds(5); // 5 second cooldown between attempts
 
         public bool RunningDevices { get { return runWorker; } }
 
@@ -219,6 +225,10 @@ namespace UI.Video
                     DisposeOnWorkerThread(source);
                 }
                 frameSources.Clear();
+                
+                // Clear device tracking
+                deviceActiveFrameSources.Clear();
+                deviceLastFailTime.Clear();
             }
 
             mutex.Set();
@@ -385,8 +395,61 @@ namespace UI.Video
             }
 
             FrameSource source = null;
+            string deviceKey = GetDeviceKey(videoConfig);
+            
+            Logger.VideoLog.Log(this, $"CreateFrameSource called for {videoConfig.DeviceName}, deviceKey: {deviceKey}");
+            
             lock (frameSources)
             {
+                Logger.VideoLog.Log(this, $"Current frameSources count: {frameSources.Count}, deviceActiveFrameSources count: {deviceActiveFrameSources.Count}");
+                
+                // Check if we already have a frame source for this device to prevent duplicates
+                var existingSource = frameSources.FirstOrDefault(fs => fs.VideoConfig.Equals(videoConfig));
+                if (existingSource != null)
+                {
+                    Logger.VideoLog.Log(this, $"Frame source already exists for {videoConfig.DeviceName}, returning existing source");
+                    return existingSource;
+                }
+                
+                // Check if another frame source is actively using this device
+                if (deviceActiveFrameSources.ContainsKey(deviceKey))
+                {
+                    var activeSource = deviceActiveFrameSources[deviceKey];
+                    Logger.VideoLog.Log(this, $"Found active source for deviceKey {deviceKey}, connected: {activeSource?.Connected}, in frameSources: {frameSources.Contains(activeSource)}");
+                    if (frameSources.Contains(activeSource) && activeSource.Connected)
+                    {
+                        Logger.VideoLog.Log(this, $"Device {videoConfig.DeviceName} is already in use by another frame source, skipping creation");
+                        return null;
+                    }
+                    else
+                    {
+                        // Remove stale reference
+                        Logger.VideoLog.Log(this, $"Removing stale reference for deviceKey {deviceKey}");
+                        deviceActiveFrameSources.Remove(deviceKey);
+                    }
+                }
+                
+                // Check cooldown period for failed devices
+                if (deviceLastFailTime.ContainsKey(deviceKey))
+                {
+                    var timeSinceFailure = DateTime.Now - deviceLastFailTime[deviceKey];
+                    Logger.VideoLog.Log(this, $"Device {videoConfig.DeviceName} last failed {timeSinceFailure.TotalSeconds:F1}s ago");
+                    if (timeSinceFailure < deviceRetryDelay)
+                    {
+                        var remainingTime = deviceRetryDelay - timeSinceFailure;
+                        Logger.VideoLog.Log(this, $"Device {videoConfig.DeviceName} is in cooldown period, {remainingTime.TotalSeconds:F0}s remaining");
+                        return null;
+                    }
+                    else
+                    {
+                        // Cooldown period has expired, remove the entry
+                        Logger.VideoLog.Log(this, $"Cooldown period expired for {videoConfig.DeviceName}");
+                        deviceLastFailTime.Remove(deviceKey);
+                    }
+                }
+                
+                Logger.VideoLog.Log(this, $"Device conflict checks passed for {videoConfig.DeviceName}, proceeding with creation");
+
                 if (videoConfig.FilePath != null)
                 {
                     try
@@ -424,8 +487,15 @@ namespace UI.Video
                         {
                             if (videoConfig.FrameWork == frameWork.FrameWork)
                             {
+                                Logger.VideoLog.Log(this, $"Attempting to create frame source for {videoConfig.DeviceName} using {frameWork.FrameWork}");
                                 source = frameWork.CreateFrameSource(videoConfig);
+                                break; // Exit loop once we find the matching framework
                             }
+                        }
+                        
+                        if (source == null)
+                        {
+                            Logger.VideoLog.Log(this, $"No suitable framework found for {videoConfig.DeviceName} with framework {videoConfig.FrameWork}");
                         }
                     }
                     catch (System.Runtime.InteropServices.COMException e)
@@ -434,11 +504,24 @@ namespace UI.Video
                         Logger.VideoLog.LogException(this, e);
                         return null;
                     }
+                    catch (Exception e)
+                    {
+                        // Generic exception handling for other camera creation failures
+                        Logger.VideoLog.LogException(this, e);
+                        return null;
+                    }
                 }
 
                 if (source != null)
                 {
                     frameSources.Add(source);
+                    deviceActiveFrameSources[deviceKey] = source; // Track active device usage
+                    Logger.VideoLog.Log(this, $"Successfully created frame source for {videoConfig.DeviceName}");
+                }
+                else
+                {
+                    deviceLastFailTime[deviceKey] = DateTime.Now; // Record failure time for cooldown
+                    Logger.VideoLog.Log(this, $"Failed to create frame source for {videoConfig.DeviceName}, applying cooldown");
                 }
             }
 
@@ -452,6 +535,8 @@ namespace UI.Video
 
         public void RemoveFrameSource(VideoConfig videoConfig)
         {
+            string deviceKey = GetDeviceKey(videoConfig);
+            
             lock (frameSources)
             {
                 FrameSource[] toRemove = frameSources.Where(fs => fs.VideoConfig == videoConfig).ToArray();
@@ -460,8 +545,39 @@ namespace UI.Video
                 {
                     DisposeOnWorkerThread(source);
                     frameSources.Remove(source);
+                    
+                    // Clean up device tracking
+                    if (deviceActiveFrameSources.ContainsKey(deviceKey) && deviceActiveFrameSources[deviceKey] == source)
+                    {
+                        deviceActiveFrameSources.Remove(deviceKey);
+                    }
                 }
             }
+        }
+        
+        private string GetDeviceKey(VideoConfig videoConfig)
+        {
+            // Create a unique key for device tracking that combines device name and path
+            string key;
+            if (!string.IsNullOrEmpty(videoConfig.FilePath))
+            {
+                key = $"file:{videoConfig.FilePath}";
+            }
+            else if (!string.IsNullOrEmpty(videoConfig.ffmpegId))
+            {
+                key = $"ffmpeg:{videoConfig.ffmpegId}";
+            }
+            else if (!string.IsNullOrEmpty(videoConfig.DirectShowPath))
+            {
+                key = $"dshow:{videoConfig.DirectShowPath}";
+            }
+            else
+            {
+                key = $"device:{videoConfig.DeviceName}";
+            }
+            
+            Logger.VideoLog.Log(this, $"GetDeviceKey for {videoConfig.DeviceName}: ffmpegId='{videoConfig.ffmpegId}', DirectShowPath='{videoConfig.DirectShowPath}', FilePath='{videoConfig.FilePath}' -> key='{key}'");
+            return key;
         }
 
         public bool HasReplay(Race currentRace)
@@ -604,12 +720,140 @@ namespace UI.Video
 
         public void CreateFrameSource(IEnumerable<VideoConfig> videoConfigs, FrameSourcesDelegate frameSourcesDelegate)
         {
+            Logger.VideoLog.Log(this, $"CreateFrameSource(IEnumerable) called with {videoConfigs.Count()} configs");
+            
+            // Smart config comparison - only clear/recreate if configs have actually changed
+            bool configsChanged = false;
+            var newConfigs = videoConfigs.ToList();
+            var currentConfigs = VideoConfigs.ToList();
+            
+            if (newConfigs.Count != currentConfigs.Count)
+            {
+                configsChanged = true;
+                Logger.VideoLog.Log(this, $"Config count changed: {currentConfigs.Count} -> {newConfigs.Count}");
+            }
+            else
+            {
+                // Compare individual configs
+                for (int i = 0; i < newConfigs.Count; i++)
+                {
+                    var newConfig = newConfigs[i];
+                    var currentConfig = currentConfigs[i];
+                    
+                    if (!ConfigsEqual(newConfig, currentConfig))
+                    {
+                        configsChanged = true;
+                        Logger.VideoLog.Log(this, $"Config changed for device: {newConfig.DeviceName}");
+                        break;
+                    }
+                }
+            }
+            
+            if (!configsChanged)
+            {
+                Logger.VideoLog.Log(this, "Video configurations unchanged, checking existing frame sources");
+                
+                // Configs haven't changed - check if existing frame sources are still functional
+                List<FrameSource> functionalSources = new List<FrameSource>();
+                bool needRecreation = false;
+                
+                lock (frameSources)
+                {
+                    foreach (var videoConfig in videoConfigs)
+                    {
+                        var existingSource = frameSources.FirstOrDefault(fs => fs.VideoConfig.Equals(videoConfig));
+                        if (existingSource != null && existingSource.Connected)
+                        {
+                            Logger.VideoLog.Log(this, $"Reusing existing connected frame source for {videoConfig.DeviceName}");
+                            functionalSources.Add(existingSource);
+                        }
+                        else
+                        {
+                            if (existingSource != null)
+                            {
+                                Logger.VideoLog.Log(this, $"Existing frame source for {videoConfig.DeviceName} is disconnected, will recreate");
+                            }
+                            else
+                            {
+                                Logger.VideoLog.Log(this, $"No existing frame source found for {videoConfig.DeviceName}, will create");
+                            }
+                            needRecreation = true;
+                        }
+                    }
+                }
+                
+                // If all existing sources are functional, use them
+                if (!needRecreation)
+                {
+                    Logger.VideoLog.Log(this, "All existing frame sources are functional, reusing them");
+                    DoOnWorkerThread(() =>
+                    {
+                        if (frameSourcesDelegate != null)
+                        {
+                            frameSourcesDelegate(functionalSources);
+                        }
+                    });
+                    return;
+                }
+                else
+                {
+                    Logger.VideoLog.Log(this, "Some frame sources need recreation, proceeding with full recreation");
+                }
+            }
+            
+            Logger.VideoLog.Log(this, "Video configurations have changed, recreating frame sources");
+            
+            // Only clear if we actually need to recreate sources
             List<FrameSource> list = new List<FrameSource>();
             foreach (var videoConfig in videoConfigs)
             {
-                RemoveFrameSource(videoConfig);
-                FrameSource fs = CreateFrameSource(videoConfig);
-                list.Add(fs);
+                Logger.VideoLog.Log(this, $"Processing VideoConfig: {videoConfig.DeviceName}");
+                
+                // Check if we can reuse an existing frame source for this exact config
+                FrameSource existingSource = null;
+                lock (frameSources)
+                {
+                    existingSource = frameSources.FirstOrDefault(fs => ConfigsEqual(fs.VideoConfig, videoConfig));
+                }
+                
+                if (existingSource != null && existingSource.Connected)
+                {
+                    Logger.VideoLog.Log(this, $"Reusing existing connected frame source for {videoConfig.DeviceName}");
+                    list.Add(existingSource);
+                }
+                else
+                {
+                    // Remove old frame source for this device if it exists
+                    RemoveFrameSource(videoConfig);
+                    
+                    FrameSource fs = CreateFrameSource(videoConfig);
+                    if (fs != null)
+                    {
+                        list.Add(fs);
+                    }
+                    else
+                    {
+                        Logger.VideoLog.Log(this, $"Frame source creation returned null for {videoConfig.DeviceName} (likely due to device conflict or cooldown)");
+                    }
+                }
+            }
+            
+            // Remove any frame sources that are no longer in the new config
+            lock (frameSources)
+            {
+                var sourcesToRemove = frameSources.Where(fs => !videoConfigs.Any(vc => ConfigsEqual(fs.VideoConfig, vc))).ToArray();
+                foreach (var sourceToRemove in sourcesToRemove)
+                {
+                    Logger.VideoLog.Log(this, $"Removing frame source no longer in config: {sourceToRemove.VideoConfig.DeviceName}");
+                    DisposeOnWorkerThread(sourceToRemove);
+                    frameSources.Remove(sourceToRemove);
+                    
+                    string deviceKey = GetDeviceKey(sourceToRemove.VideoConfig);
+                    if (deviceActiveFrameSources.ContainsKey(deviceKey) && deviceActiveFrameSources[deviceKey] == sourceToRemove)
+                    {
+                        deviceActiveFrameSources.Remove(deviceKey);
+                    }
+                }
             }
 
             DoOnWorkerThread(() =>
@@ -619,6 +863,56 @@ namespace UI.Video
                     frameSourcesDelegate(list);
                 }
             });
+        }
+        
+        // Helper method to compare video configs for equality
+        private bool ConfigsEqual(VideoConfig config1, VideoConfig config2)
+        {
+            if (config1 == null && config2 == null) return true;
+            if (config1 == null || config2 == null) return false;
+            
+            return config1.DeviceName == config2.DeviceName &&
+                   config1.ffmpegId == config2.ffmpegId &&
+                   config1.DirectShowPath == config2.DirectShowPath &&
+                   config1.FilePath == config2.FilePath &&
+                   config1.FrameWork == config2.FrameWork &&
+                   config1.RecordVideoForReplays == config2.RecordVideoForReplays &&
+                   config1.RecordResolution == config2.RecordResolution &&
+                   config1.RecordFrameRate == config2.RecordFrameRate &&
+                   VideoBoundsEqual(config1.VideoBounds, config2.VideoBounds);
+        }
+        
+        private bool VideoBoundsEqual(IEnumerable<VideoBounds> bounds1, IEnumerable<VideoBounds> bounds2)
+        {
+            if (bounds1 == null && bounds2 == null) return true;
+            if (bounds1 == null || bounds2 == null) return false;
+            
+            var list1 = bounds1.ToList();
+            var list2 = bounds2.ToList();
+            
+            if (list1.Count != list2.Count) return false;
+            
+            for (int i = 0; i < list1.Count; i++)
+            {
+                var vb1 = list1[i];
+                var vb2 = list2[i];
+                
+                if (vb1.SourceType != vb2.SourceType ||
+                    vb1.Channel != vb2.Channel ||
+                    vb1.ShowInGrid != vb2.ShowInGrid ||
+                    vb1.Crop != vb2.Crop ||
+                    vb1.OverlayText != vb2.OverlayText ||
+                    vb1.OverlayAlignment != vb2.OverlayAlignment ||
+                    Math.Abs(vb1.RelativeSourceBounds.X - vb2.RelativeSourceBounds.X) > 0.001f ||
+                    Math.Abs(vb1.RelativeSourceBounds.Y - vb2.RelativeSourceBounds.Y) > 0.001f ||
+                    Math.Abs(vb1.RelativeSourceBounds.Width - vb2.RelativeSourceBounds.Width) > 0.001f ||
+                    Math.Abs(vb1.RelativeSourceBounds.Height - vb2.RelativeSourceBounds.Height) > 0.001f)
+                {
+                    return false;
+                }
+            }
+            
+            return true;
         }
 
         public void Initialize(FrameSource frameSource)
@@ -824,7 +1118,30 @@ namespace UI.Video
                         {
                             if (MaintainConnections)
                             {
-                                needsInitialize.AddRange(frameSources.Where(r => !r.Connected));
+                                // Only add disconnected frame sources that aren't in cooldown
+                                var disconnectedSources = frameSources.Where(r => !r.Connected);
+                                foreach (var source in disconnectedSources)
+                                {
+                                    string deviceKey = GetDeviceKey(source.VideoConfig);
+                                    
+                                    // Check if device is in cooldown period
+                                    if (deviceLastFailTime.ContainsKey(deviceKey))
+                                    {
+                                        var timeSinceFailure = DateTime.Now - deviceLastFailTime[deviceKey];
+                                        if (timeSinceFailure < deviceRetryDelay)
+                                        {
+                                            // Still in cooldown, skip this source
+                                            continue;
+                                        }
+                                        else
+                                        {
+                                            // Cooldown expired, remove the entry
+                                            deviceLastFailTime.Remove(deviceKey);
+                                        }
+                                    }
+                                    
+                                    needsInitialize.Add(source);
+                                }
                             }
                         }
 
@@ -853,6 +1170,14 @@ namespace UI.Video
                             if (shouldStart)
                             {
                                 result = frameSource.Start();
+                                
+                                if (!result)
+                                {
+                                    // Record failure time for cooldown
+                                    string deviceKey = GetDeviceKey(frameSource.VideoConfig);
+                                    deviceLastFailTime[deviceKey] = DateTime.Now;
+                                    Logger.VideoLog.Log(this, $"Frame source start failed for {frameSource.VideoConfig.DeviceName}, applying cooldown");
+                                }
                             }
 
                             if (result)

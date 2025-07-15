@@ -320,6 +320,7 @@ namespace FfmpegMediaPlatform
 
         private void Run()
         {
+            DateTime lastFrameTime = DateTime.Now;
             while(run)
             {
                 if (!inited)
@@ -336,6 +337,25 @@ namespace FfmpegMediaPlatform
                     continue;
                 }
                 
+                // Timeout logic
+                if (DateTime.Now - lastFrameTime > TimeSpan.FromSeconds(10))
+                {
+                    Logger.VideoLog.Log(this, "No frame received in 10 seconds. Forcing process restart.");
+                    try
+                    {
+                        process.Kill();
+                    }
+                    catch (Exception ex) 
+                    {
+                        Logger.VideoLog.Log(this, "Error killing ffmpeg process on timeout");
+                        Logger.VideoLog.LogException(this, ex);
+                    }
+                    // The process.Exited event will handle the restart
+                    // We just need to wait here for the process to be restarted.
+                    Thread.Sleep(1000);
+                    continue;
+                }
+
                 Stream reader = process.StandardOutput.BaseStream; // Use binary stream, not text StreamReader
                 if (reader == null)
                 {
@@ -369,9 +389,10 @@ namespace FfmpegMediaPlatform
                             
                             if (totalRead == frameSize)
                             {
+                                lastFrameTime = DateTime.Now; // Update last frame time
                                 ProcessImage();
                                 
-                                // Reset restart count on successful frame processing
+                                // Reset restart counter on successful frame processing
                                 if (processRestartCount > 0)
                                 {
                                     var uptime = DateTime.Now - lastProcessStart;
@@ -471,6 +492,7 @@ namespace FfmpegMediaPlatform
                     FrameProcessNumber++;
                     frame.SetData(rgbaBuffer, SampleTime, FrameProcessNumber);
                     currentRawTextures.WriteOne(frame);
+                    NotifyReceivedFrame();
                 }
             }
 

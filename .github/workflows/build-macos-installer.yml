@@ -1,0 +1,304 @@
+name: Build macOS Installer
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      architecture:
+        description: 'Target Architecture'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - osx-x64
+          - osx-arm64
+      configuration:
+        description: 'Build Configuration'
+        required: true
+        default: 'Release'
+        type: choice
+        options:
+          - Release
+          - Debug
+      create_dmg:
+        description: 'Create DMG installer'
+        required: true
+        default: true
+        type: boolean
+      upload_artifacts:
+        description: 'Upload build artifacts'
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  build-macos-installer:
+    runs-on: macos-latest
+    
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Get full history for version info
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '6.0.x'
+    
+    - name: Cache NuGet packages
+      uses: actions/cache@v3
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+        restore-path: |
+          ~/.nuget/packages
+    
+    - name: Restore dependencies
+      run: dotnet restore "FPVMacside - Core.sln"
+    
+    - name: Get version from tag or input
+      id: version
+      run: |
+        if [ "${{ github.event_name }}" = "push" ] && [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
+          # Extract version from tag (remove 'v' prefix if present)
+          VERSION=${GITHUB_REF#refs/tags/}
+          VERSION=${VERSION#v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "is_release=true" >> $GITHUB_OUTPUT
+        else
+          # Use version from project file for manual builds
+          VERSION=$(grep -oP '<Version>\K[^<]+' Directory.Build.props | head -1)
+          echo "version=$VERSION-dev-$(date +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
+          echo "is_release=false" >> $GITHUB_OUTPUT
+        fi
+        echo "Building version: $VERSION"
+    
+    - name: Set build parameters
+      id: params
+      run: |
+        # Set architecture
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          ARCH="${{ github.event.inputs.architecture }}"
+          CONFIG="${{ github.event.inputs.configuration }}"
+          CREATE_DMG="${{ github.event.inputs.create_dmg }}"
+        else
+          ARCH="both"
+          CONFIG="Release"
+          CREATE_DMG="true"
+        fi
+        
+        echo "architecture=$ARCH" >> $GITHUB_OUTPUT
+        echo "configuration=$CONFIG" >> $GITHUB_OUTPUT
+        echo "create_dmg=$CREATE_DMG" >> $GITHUB_OUTPUT
+        
+        echo "Architecture: $ARCH"
+        echo "Configuration: $CONFIG"
+        echo "Create DMG: $CREATE_DMG"
+    
+    - name: Make scripts executable
+      run: |
+        chmod +x scripts/build-macos-installer.sh
+        chmod +x scripts/create-macos-app.sh
+        chmod +x scripts/create-macos-dmg.sh
+    
+    - name: Build macOS installer
+      run: |
+        BUILD_ARGS=(
+          "--arch" "${{ steps.params.outputs.architecture }}"
+          "--output" "./dist"
+          "--configuration" "${{ steps.params.outputs.configuration }}"
+        )
+        
+        # Add app-only flag if DMG creation is disabled
+        if [ "${{ steps.params.outputs.create_dmg }}" != "true" ]; then
+          BUILD_ARGS+=("--app-only")
+        fi
+        
+        ./scripts/build-macos-installer.sh "${BUILD_ARGS[@]}"
+    
+    - name: List build artifacts
+      run: |
+        echo "Build artifacts:"
+        find ./dist -type f -name "*.app" -o -name "*.dmg" | sort
+        echo ""
+        echo "Detailed listing:"
+        ls -la ./dist/ || true
+        if [ -d "./dist/FPVTrackside.app" ]; then
+          echo ""
+          echo "App bundle contents:"
+          ls -la ./dist/FPVTrackside.app/Contents/
+        fi
+    
+    - name: Test app bundle
+      run: |
+        if [ -d "./dist/FPVTrackside.app" ]; then
+          echo "Testing app bundle..."
+          
+          # Check bundle structure
+          if [ ! -f "./dist/FPVTrackside.app/Contents/Info.plist" ]; then
+            echo "❌ Missing Info.plist"
+            exit 1
+          fi
+          
+          if [ ! -f "./dist/FPVTrackside.app/Contents/MacOS/FPVMacSideCore" ]; then
+            echo "❌ Missing executable"
+            exit 1
+          fi
+          
+          if [ ! -x "./dist/FPVTrackside.app/Contents/MacOS/FPVMacSideCore" ]; then
+            echo "❌ Executable is not executable"
+            exit 1
+          fi
+          
+          # Verify Info.plist
+          plutil -lint "./dist/FPVTrackside.app/Contents/Info.plist"
+          if [ $? -eq 0 ]; then
+            echo "✅ Info.plist is valid"
+          else
+            echo "❌ Info.plist is invalid"
+            exit 1
+          fi
+          
+          echo "✅ App bundle structure is valid"
+        else
+          echo "⚠️ No app bundle found to test"
+        fi
+    
+    - name: Test DMG files
+      if: steps.params.outputs.create_dmg == 'true'
+      run: |
+        DMG_FILES=$(find ./dist -name "*.dmg" -type f)
+        if [ -n "$DMG_FILES" ]; then
+          echo "Testing DMG files..."
+          for dmg in $DMG_FILES; do
+            echo "Testing: $dmg"
+            if hdiutil verify "$dmg"; then
+              echo "✅ $dmg is valid"
+            else
+              echo "❌ $dmg is invalid"
+              exit 1
+            fi
+          done
+        else
+          echo "⚠️ No DMG files found to test"
+        fi
+    
+    - name: Create release assets info
+      if: steps.version.outputs.is_release == 'true'
+      run: |
+        echo "# FPVTrackside Core v${{ steps.version.outputs.version }}" > ./dist/RELEASE_INFO.md
+        echo "" >> ./dist/RELEASE_INFO.md
+        echo "## macOS Installation" >> ./dist/RELEASE_INFO.md
+        echo "" >> ./dist/RELEASE_INFO.md
+        echo "### System Requirements" >> ./dist/RELEASE_INFO.md
+        echo "- macOS 10.14 (Mojave) or later" >> ./dist/RELEASE_INFO.md
+        echo "- Intel Mac or Apple Silicon Mac" >> ./dist/RELEASE_INFO.md
+        echo "" >> ./dist/RELEASE_INFO.md
+        echo "### Installation Instructions" >> ./dist/RELEASE_INFO.md
+        echo "1. Download the appropriate DMG file for your Mac:" >> ./dist/RELEASE_INFO.md
+        if [ -f "./dist/FPVTrackside-Installer-${{ steps.version.outputs.version }}-Intel.dmg" ]; then
+          echo "   - **Intel Macs**: FPVTrackside-Installer-${{ steps.version.outputs.version }}-Intel.dmg" >> ./dist/RELEASE_INFO.md
+        fi
+        if [ -f "./dist/FPVTrackside-Installer-${{ steps.version.outputs.version }}-AppleSilicon.dmg" ]; then
+          echo "   - **Apple Silicon Macs**: FPVTrackside-Installer-${{ steps.version.outputs.version }}-AppleSilicon.dmg" >> ./dist/RELEASE_INFO.md
+        fi
+        echo "2. Double-click the downloaded DMG file to mount it" >> ./dist/RELEASE_INFO.md
+        echo "3. Drag FPVTrackside.app to the Applications folder" >> ./dist/RELEASE_INFO.md
+        echo "4. Eject the DMG file" >> ./dist/RELEASE_INFO.md
+        echo "5. Launch FPVTrackside from Applications or Spotlight" >> ./dist/RELEASE_INFO.md
+        echo "" >> ./dist/RELEASE_INFO.md
+        echo "### First Launch" >> ./dist/RELEASE_INFO.md
+        echo "On first launch, macOS may show a security warning. If this happens:" >> ./dist/RELEASE_INFO.md
+        echo "1. Go to System Preferences > Security & Privacy" >> ./dist/RELEASE_INFO.md
+        echo "2. Click 'Open Anyway' next to the FPVTrackside message" >> ./dist/RELEASE_INFO.md
+        echo "3. Confirm by clicking 'Open' in the dialog" >> ./dist/RELEASE_INFO.md
+        echo "" >> ./dist/RELEASE_INFO.md
+        echo "### Camera Permissions" >> ./dist/RELEASE_INFO.md
+        echo "FPVTrackside will request camera access for video capture. Grant permission when prompted." >> ./dist/RELEASE_INFO.md
+        
+        cat ./dist/RELEASE_INFO.md
+    
+    - name: Upload build artifacts
+      if: github.event.inputs.upload_artifacts != 'false'
+      uses: actions/upload-artifact@v3
+      with:
+        name: macos-installer-${{ steps.version.outputs.version }}-${{ steps.params.outputs.architecture }}
+        path: |
+          ./dist/*.app
+          ./dist/*.dmg
+          ./dist/RELEASE_INFO.md
+        retention-days: 30
+    
+    - name: Upload release assets (for tags)
+      if: steps.version.outputs.is_release == 'true'
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ github.ref_name }}
+        name: FPVTrackside Core ${{ github.ref_name }}
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+        files: |
+          ./dist/*.dmg
+          ./dist/RELEASE_INFO.md
+        body: |
+          ## FPVTrackside Core Release ${{ github.ref_name }}
+          
+          Professional macOS installer packages for FPVTrackside Core.
+          
+          ### Downloads
+          
+          Choose the appropriate installer for your Mac:
+          
+          **Intel Macs (x64):**
+          - FPVTrackside-Installer-${{ steps.version.outputs.version }}-Intel.dmg
+          
+          **Apple Silicon Macs (ARM64):**
+          - FPVTrackside-Installer-${{ steps.version.outputs.version }}-AppleSilicon.dmg
+          
+          ### Installation
+          
+          1. Download the appropriate DMG file for your Mac
+          2. Double-click to mount the DMG
+          3. Drag FPVTrackside to Applications
+          4. Launch from Applications or Spotlight
+          
+          ### Requirements
+          
+          - macOS 10.14 (Mojave) or later
+          - Camera access permission for video capture
+          
+          ### Changes
+          
+          See the automatically generated release notes below for details.
+    
+    - name: Build summary
+      run: |
+        echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Architecture:** ${{ steps.params.outputs.architecture }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Configuration:** ${{ steps.params.outputs.configuration }}" >> $GITHUB_STEP_SUMMARY
+        echo "**DMG Created:** ${{ steps.params.outputs.create_dmg }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ -d "./dist" ]; then
+          echo "### Build Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| File | Size |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|" >> $GITHUB_STEP_SUMMARY
+          
+          find ./dist -type f \( -name "*.app" -o -name "*.dmg" \) | while read file; do
+            size=$(du -sh "$file" | cut -f1)
+            basename=$(basename "$file")
+            echo "| $basename | $size |" >> $GITHUB_STEP_SUMMARY
+          done
+        fi 

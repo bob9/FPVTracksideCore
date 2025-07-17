@@ -79,7 +79,7 @@ namespace UI
             Window.Title = Assembly.GetEntryAssembly().GetName().Name + " - " + Assembly.GetEntryAssembly().GetName().Version;
 
             Logger.Init(Log);
-
+            Console.WriteLine("Log files are in " + Log.FullName);
 
             FileInfo[] oldConfigs = Data.GetFiles("*.xml").Where(r => !r.Name.EndsWith("GeneralSettings.xml")).ToArray();
             if (oldConfigs.Any())

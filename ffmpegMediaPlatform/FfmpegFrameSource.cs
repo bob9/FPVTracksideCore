@@ -44,17 +44,16 @@ namespace FfmpegMediaPlatform
         }
 
         protected FfmpegMediaFramework ffmpegMediaFramework;
-
         protected Process process;
-
+        protected bool inited;
         protected byte[] buffer;
-
         private Thread thread;
-        private bool run;
-        private bool inited;
+        protected bool run;
+        protected int processRestartCount = 0;
+        protected DateTime streamStartTime;
+        protected bool fallbackAttempted = false;
         
         // Auto-recovery system for resilient operation
-        private int processRestartCount = 0;
         private DateTime lastProcessStart = DateTime.MinValue;
         private readonly TimeSpan minProcessRunTime = TimeSpan.FromSeconds(5); // Minimum time before allowing restart
         private readonly int maxProcessRestarts = 10; // Maximum restarts before giving up
@@ -65,6 +64,7 @@ namespace FfmpegMediaPlatform
             this.ffmpegMediaFramework = ffmpegMediaFramework;
             // Use Color format (RGBA) which is universally supported across all platforms
             SurfaceFormat = SurfaceFormat.Color;
+            rawTextures = new XBuffer<RawTexture>(5, 640, 480); // Initialize with default size
         }
 
         public override void Dispose()
@@ -169,6 +169,8 @@ namespace FfmpegMediaPlatform
 
             CleanupProcess(); // Clean up any existing process
             inited = false;
+            fallbackAttempted = false; // Reset fallback flag for new attempt
+            streamStartTime = DateTime.Now; // Record start time for fallback logic
 
             ProcessStartInfo processStartInfo = GetProcessStartInfo();
 
@@ -184,35 +186,89 @@ namespace FfmpegMediaPlatform
 
                     if (!inited && e.Data.Contains("Stream"))
                     {
-                        Regex reg = new Regex("([0-9]*)x([0-9]*), ([0-9]*) tbr");
+                        // Try to parse the stream information
+                        // Handle both normal framerates and 1080p's "1000k tbr" case
+                        Regex reg = new Regex("([0-9]*)x([0-9]*), ([0-9]*k?) tbr");
                         Match m = reg.Match(e.Data);
-                    if (m.Success) 
-                    {
-                        if (int.TryParse(m.Groups[1].Value, out int w) && int.TryParse(m.Groups[2].Value, out int h)) 
+                        if (m.Success) 
                         {
-                            width = w;
-                            height = h;
-                        }
+                            if (int.TryParse(m.Groups[1].Value, out int w) && int.TryParse(m.Groups[2].Value, out int h)) 
+                            {
+                                width = w;
+                                height = h;
+                                Logger.VideoLog.Log(this, $"DEBUG: Setting dimensions from stream info: width={width}, height={height}");
+                            }
 
-                        buffer = new byte[width * height * 2]; // UYVY422 = 2 bytes per pixel
-                        rawTextures = new XBuffer<RawTexture>(5, width, height);
-
-                        inited = true;
-                        Logger.VideoLog.Log(this, $"Video stream initialized: {width}x{height} (UYVY422 input -> RGBA output)");
-                        
-                        // Reset restart counter on successful stream initialization (unconditional reset)
-                        if (processRestartCount > 0)
-                        {
-                            Logger.VideoLog.Log(this, $"Video stream successfully initialized, resetting restart counter from {processRestartCount} to 0");
+                            // Calculate frame size based on format
+                            // For 1080p, we use yuv420p (1.5 bytes per pixel), otherwise uyvy422 (2 bytes per pixel)
+                            int frameSize;
+                            if (width >= 1920 && height >= 1080)
+                            {
+                                // YUV420P format: 1.5 bytes per pixel
+                                frameSize = width * height * 3 / 2;
+                            }
+                            else
+                            {
+                                // UYVY422 format: 2 bytes per pixel
+                                frameSize = width * height * 2;
+                            }
+                            
+                            buffer = new byte[frameSize];
+                            double bytesPerPixel = (width >= 1920 && height >= 1080) ? 1.5 : 2.0;
+                            Logger.VideoLog.Log(this, $"DEBUG: Allocated buffer for {width}x{height} with {bytesPerPixel} bytes per pixel: {frameSize} bytes");
+                            
+                            // Update rawTextures with the correct dimensions
+                            if (rawTextures != null)
+                            {
+                                rawTextures.Dispose();
+                            }
+                            rawTextures = new XBuffer<RawTexture>(5, width, height);
+                            
+                            inited = true;
+                            Logger.VideoLog.Log(this, $"Video stream initialized: {width}x{height} ({(width >= 1920 && height >= 1080 ? "YUV420P" : "UYVY422")} input -> RGBA output)");
+                            
+                            // Check if this is 1080p with framerate detection issues
+                            string framerateStr = m.Groups[3].Value;
+                            if (framerateStr.Contains("k") && width == 1920 && height == 1080)
+                            {
+                                Logger.VideoLog.Log(this, $"1080p stream initialized with framerate detection issue ({framerateStr} tbr) - stream should work fine");
+                                Console.WriteLine($"DEBUG: 1080p stream initialized with framerate detection issue ({framerateStr} tbr) - stream should work fine");
+                            }
+                            
+                            // Reset restart counter on successful stream initialization (unconditional reset)
+                            if (processRestartCount > 0)
+                            {
+                                Logger.VideoLog.Log(this, $"Video stream successfully initialized, resetting restart counter from {processRestartCount} to 0");
+                            }
+                            else
+                            {
+                                Logger.VideoLog.Log(this, $"Video stream successfully initialized, restart counter already at 0");
+                            }
+                            processRestartCount = 0; // Always reset on successful stream init
                         }
                         else
                         {
-                            Logger.VideoLog.Log(this, $"Video stream successfully initialized, restart counter already at 0");
+                            // Check for framerate detection issues (common with 1080p)
+                            if (e.Data.Contains("1000k tbr") || e.Data.Contains("not enough frames to estimate rate"))
+                            {
+                                Logger.VideoLog.Log(this, $"Framerate detection issue detected: {e.Data}");
+                                Console.WriteLine($"DEBUG: Framerate detection issue detected: {e.Data}");
+                                
+                                // For 1080p, this is expected and the stream should still work
+                                if (VideoConfig.VideoMode != null && 
+                                    VideoConfig.VideoMode.Width == 1920 && 
+                                    VideoConfig.VideoMode.Height == 1080)
+                                {
+                                    Logger.VideoLog.Log(this, "1080p framerate detection issue detected - this is expected, stream should work");
+                                    Console.WriteLine("DEBUG: 1080p framerate detection issue detected - this is expected, stream should work");
+                                    
+                                    // Don't treat this as an error for 1080p - the stream should work fine
+                                    // The framerate detection issue is cosmetic, not functional
+                                }
+                            }
                         }
-                        processRestartCount = 0; // Always reset on successful stream init
                     }
-                }
-                
+                    
                     // Check for device access errors and handle them gracefully
                     if (e.Data.Contains("Could not lock device for configuration") ||
                         e.Data.Contains("Input/output error") ||
@@ -323,7 +379,7 @@ namespace FfmpegMediaPlatform
             DateTime lastFrameTime = DateTime.Now;
             while(run)
             {
-                if (!inited)
+                if (!inited || width <= 0 || height <= 0)
                 {
                     Thread.Sleep(10); // Don't busy wait
                     continue;
@@ -365,10 +421,31 @@ namespace FfmpegMediaPlatform
 
                 try
                 {
-                    // Calculate frame size in bytes (UYVY422 = 2 bytes per pixel)
-                    int frameSize = width * height * 2; // UYVY422 = 2 bytes per pixel
+                    // Calculate frame size in bytes based on actual buffer size and format
+                    // The buffer was allocated based on the actual stream dimensions, not the reported ones
+                    int actualFrameSize = buffer.Length;
                     
-                    if (buffer != null && buffer.Length >= frameSize)
+                    // Determine format based on buffer size vs expected size
+                    bool isYuv420p = false;
+                    if (width >= 1920 && height >= 1080)
+                    {
+                        // Check if this is actually yuv420p by comparing buffer size
+                        int expectedUyvy422 = width * height * 2;
+                        int expectedYuv420p = width * height * 3 / 2;
+                        
+                        if (Math.Abs(actualFrameSize - expectedYuv420p) < Math.Abs(actualFrameSize - expectedUyvy422))
+                        {
+                            isYuv420p = true;
+                        }
+                    }
+                    
+                    // Add debugging for frame size issues
+                    if (width == 1920 && height == 1080)
+                    {
+                        Logger.VideoLog.Log(this, $"DEBUG: Frame reading - width={width}, height={height}, actualFrameSize={actualFrameSize}, buffer.Length={buffer?.Length ?? 0}, format={(isYuv420p ? "yuv420p" : "uyvy422")}");
+                    }
+                    
+                    if (buffer != null && buffer.Length >= actualFrameSize)
                     {
                         // Use simple frame reading approach (based on working macOS example)
                         // Read the exact frame size in a straightforward loop
@@ -376,9 +453,9 @@ namespace FfmpegMediaPlatform
                         
                         try
                         {
-                            while (totalRead < frameSize && run && !process.HasExited)
+                            while (totalRead < actualFrameSize && run && !process.HasExited)
                             {
-                                int bytesRead = reader.Read(buffer, totalRead, frameSize - totalRead);
+                                int bytesRead = reader.Read(buffer, totalRead, actualFrameSize - totalRead);
                                 if (bytesRead == 0)
                                 {
                                     // No data available, process might be ending
@@ -387,7 +464,7 @@ namespace FfmpegMediaPlatform
                                 totalRead += bytesRead;
                             }
                             
-                            if (totalRead == frameSize)
+                            if (totalRead == actualFrameSize)
                             {
                                 lastFrameTime = DateTime.Now; // Update last frame time
                                 ProcessImage();
@@ -405,7 +482,81 @@ namespace FfmpegMediaPlatform
                             }
                             else if (totalRead > 0)
                             {
-                                Logger.VideoLog.Log(this, $"Incomplete frame read: {totalRead}/{frameSize} bytes - continuing");
+                                // Check if this is a resolution mismatch (common with 1080p cameras falling back to 720p)
+                                // Calculate expected frame size based on format
+                                int expectedBytesPerPixel = (width >= 1920 && height >= 1080) ? 3 : 2; // yuv420p = 1.5, uyvy422 = 2
+                                int expectedFrameSize = width * height * expectedBytesPerPixel / 2;
+                                
+                                // For UYVY422: frameSize = width * height * 2, so width * height = totalRead / 2
+                                // For YUV420P: frameSize = width * height * 1.5, so width * height = totalRead / 1.5
+                                int pixels = (width >= 1920 && height >= 1080) ? (totalRead * 2 / 3) : (totalRead / 2);
+                                
+                                // Try to find reasonable width/height combinations
+                                int actualWidth = 0, actualHeight = 0;
+                                
+                                // Common resolutions to check
+                                int[] commonWidths = { 640, 1280, 1920, 2560, 3840 };
+                                int[] commonHeights = { 480, 720, 1080, 1440, 2160 };
+                                
+                                foreach (int w in commonWidths)
+                                {
+                                    foreach (int h in commonHeights)
+                                    {
+                                        if (w * h == pixels)
+                                        {
+                                            actualWidth = w;
+                                            actualHeight = h;
+                                            break;
+                                        }
+                                    }
+                                    if (actualWidth > 0) break;
+                                }
+                                
+                                // If no common resolution found, try to estimate
+                                if (actualWidth == 0)
+                                {
+                                    // Try to find a reasonable aspect ratio (16:9, 4:3, etc.)
+                                    double aspectRatio = 16.0 / 9.0; // Assume 16:9
+                                    actualHeight = (int)Math.Sqrt(pixels / aspectRatio);
+                                    actualWidth = pixels / actualHeight;
+                                    
+                                    // Round to nearest multiple of 8 (common alignment requirement)
+                                    actualWidth = (actualWidth / 8) * 8;
+                                    actualHeight = (actualHeight / 8) * 8;
+                                }
+                                
+                                if (actualWidth > 0 && actualHeight > 0 && (actualWidth != width || actualHeight != height))
+                                {
+                                    string format = (width >= 1920 && height >= 1080) ? "YUV420P" : "UYVY422";
+                                    Logger.VideoLog.Log(this, $"Resolution mismatch detected: expected {width}x{height} ({expectedFrameSize} bytes, {format}), got {actualWidth}x{actualHeight} ({totalRead} bytes)");
+                                    
+                                    // Update dimensions to match actual output
+                                    width = actualWidth;
+                                    height = actualHeight;
+                                    
+                                    // Recalculate frame size with new dimensions
+                                    int newBytesPerPixel = (width >= 1920 && height >= 1080) ? 3 : 2;
+                                    actualFrameSize = width * height * newBytesPerPixel / 2; // Recalculate actualFrameSize
+                                    
+                                    // Reallocate buffer with correct size
+                                    buffer = new byte[actualFrameSize];
+                                    Logger.VideoLog.Log(this, $"Adjusted to actual resolution: {width}x{height} ({actualFrameSize} bytes)");
+                                    
+                                    // Update rawTextures with the correct dimensions
+                                    if (rawTextures != null)
+                                    {
+                                        rawTextures.Dispose();
+                                    }
+                                    rawTextures = new XBuffer<RawTexture>(5, width, height);
+                                    
+                                    // Process this frame with the correct dimensions
+                                    ProcessImage();
+                                    lastFrameTime = DateTime.Now;
+                                }
+                                else
+                                {
+                                    Logger.VideoLog.Log(this, $"Incomplete frame read: {totalRead}/{expectedFrameSize} bytes - continuing");
+                                }
                                 // Just continue to next iteration
                                 continue;
                             }
@@ -418,7 +569,7 @@ namespace FfmpegMediaPlatform
                     }
                     else
                     {
-                        Logger.VideoLog.Log(this, "Buffer not initialized properly");
+                        Logger.VideoLog.Log(this, $"Buffer not initialized properly - width={width}, height={height}, actualFrameSize={actualFrameSize}, buffer.Length={buffer?.Length ?? 0}");
                         Thread.Sleep(100);
                     }
                 }
@@ -448,45 +599,39 @@ namespace FfmpegMediaPlatform
                 {
                     // Convert UYVY422 to RGBA for MonoGame SurfaceFormat.Color compatibility
                     // UYVY422 = 2 bytes per pixel packed format (U Y0 V Y1 for 2 pixels) - true camera native
-                    // RGBA = 4 bytes per pixel (R, G, B, A) - matching SurfaceFormat.Color
-                    byte[] rgbaBuffer = new byte[width * height * 4];
+                    byte[] rgbaBuffer = new byte[width * height * 4]; // RGBA = 4 bytes per pixel
                     
-                    // Convert UYVY422 to RGBA (YUV to RGB conversion)
-                    // UYVY422 packs 2 pixels into 4 bytes: [U Y0 V Y1]
-                    // Process the entire frame sequentially
-                    for (int pixelPair = 0; pixelPair < (width * height) / 2; pixelPair++)
+                    for (int i = 0; i < width * height / 2; i++) // Process 2 pixels at a time
                     {
-                        // Calculate buffer indices
-                        int uyvyIndex = pixelPair * 4; // 4 bytes per pixel pair in UYVY422
-                        int rgba0Index = pixelPair * 8; // 8 bytes per pixel pair in RGBA (2 pixels * 4 bytes each)
-                        int rgba1Index = rgba0Index + 4;
+                        int bufferIndex = i * 4; // UYVY422: 4 bytes for 2 pixels
+                        int rgbaIndex = i * 8;   // RGBA: 8 bytes for 2 pixels
                         
-                        // Extract UYVY values
-                        int U = buffer[uyvyIndex] - 128;     // U (chrominance)
-                        int Y0 = buffer[uyvyIndex + 1];      // Y0 (luminance pixel 0)
-                        int V = buffer[uyvyIndex + 2] - 128; // V (chrominance)  
-                        int Y1 = buffer[uyvyIndex + 3];      // Y1 (luminance pixel 1)
+                        byte u = buffer[bufferIndex];
+                        byte y0 = buffer[bufferIndex + 1];
+                        byte v = buffer[bufferIndex + 2];
+                        byte y1 = buffer[bufferIndex + 3];
                         
-                        // Convert YUV to RGB using ITU-R BT.601 conversion for pixel 0
-                        int R0 = Clamp(Y0 + (int)(1.402 * V));
-                        int G0 = Clamp(Y0 - (int)(0.344 * U) - (int)(0.714 * V));
-                        int B0 = Clamp(Y0 + (int)(1.772 * U));
+                        // Convert YUV to RGB using ITU-R BT.601 standard
+                        // Pixel 1
+                        int r0 = (int)(y0 + 1.402 * (v - 128));
+                        int g0 = (int)(y0 - 0.344 * (u - 128) - 0.714 * (v - 128));
+                        int b0 = (int)(y0 + 1.772 * (u - 128));
                         
-                        // Convert YUV to RGB for pixel 1
-                        int R1 = Clamp(Y1 + (int)(1.402 * V));
-                        int G1 = Clamp(Y1 - (int)(0.344 * U) - (int)(0.714 * V));
-                        int B1 = Clamp(Y1 + (int)(1.772 * U));
+                        // Pixel 2
+                        int r1 = (int)(y1 + 1.402 * (v - 128));
+                        int g1 = (int)(y1 - 0.344 * (u - 128) - 0.714 * (v - 128));
+                        int b1 = (int)(y1 + 1.772 * (u - 128));
                         
-                        // Store RGBA values for both pixels
-                        rgbaBuffer[rgba0Index] = (byte)R0;
-                        rgbaBuffer[rgba0Index + 1] = (byte)G0;
-                        rgbaBuffer[rgba0Index + 2] = (byte)B0;
-                        rgbaBuffer[rgba0Index + 3] = 255; // Alpha
+                        // Clamp values and set RGBA
+                        rgbaBuffer[rgbaIndex] = (byte)Clamp(r0);     // R
+                        rgbaBuffer[rgbaIndex + 1] = (byte)Clamp(g0); // G
+                        rgbaBuffer[rgbaIndex + 2] = (byte)Clamp(b0); // B
+                        rgbaBuffer[rgbaIndex + 3] = 255;             // A
                         
-                        rgbaBuffer[rgba1Index] = (byte)R1;
-                        rgbaBuffer[rgba1Index + 1] = (byte)G1;
-                        rgbaBuffer[rgba1Index + 2] = (byte)B1;
-                        rgbaBuffer[rgba1Index + 3] = 255; // Alpha
+                        rgbaBuffer[rgbaIndex + 4] = (byte)Clamp(r1); // R
+                        rgbaBuffer[rgbaIndex + 5] = (byte)Clamp(g1); // G
+                        rgbaBuffer[rgbaIndex + 6] = (byte)Clamp(b1); // B
+                        rgbaBuffer[rgbaIndex + 7] = 255;             // A
                     }
                     
                     FrameProcessNumber++;

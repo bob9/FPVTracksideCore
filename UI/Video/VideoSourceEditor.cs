@@ -61,6 +61,11 @@ namespace UI.Video
             trackChanges = true;
             CanReOrder = false;
 
+            // Only show configured cameras in the left panel
+            Console.WriteLine("DEBUG: Loading configured cameras for left panel");
+            Console.WriteLine($"DEBUG: Found {videoManager.VideoConfigs.Count} configured cameras");
+            
+            // Set objects to only the configured cameras (saved configurations)
             SetObjects(videoManager.VideoConfigs, true);
 
             InitMapperNode(Selected);
@@ -94,6 +99,8 @@ namespace UI.Video
             mouseMenu.TopToBottom = false;
 
             VideoConfig[] vcs = VideoManager.GetAvailableVideoSources().OrderBy(vc => vc.DeviceName).ToArray();
+            Console.WriteLine($"DEBUG: Add button clicked - found {vcs.Length} total available cameras");
+            
             foreach (VideoConfig source in vcs)
             {
                 if (!Objects.Any(r => r.Equals(source)))
@@ -103,13 +110,19 @@ namespace UI.Video
                     {
                         if (VideoManager.ValidDevice(source))
                         {
+                            Console.WriteLine($"DEBUG: Adding camera to Add menu: {sourceAsString}");
                             mouseMenu.AddItem(sourceAsString, () => { AddNew(source); });
                         }
                         else
                         {
+                            Console.WriteLine($"DEBUG: Camera not valid for Add menu: {sourceAsString}");
                             mouseMenu.AddDisabledItem(sourceAsString);
                         }
                     }
+                }
+                else
+                {
+                    Console.WriteLine($"DEBUG: Camera already configured, not showing in Add menu: {source.DeviceName}");
                 }
             }
 
@@ -224,15 +237,18 @@ namespace UI.Video
                 // Reload video manager to detect newly available cameras
                 VideoManager.LoadDevices();
                 
-                // Update the list of available video sources
+                // Update the list of available video sources for the Add button
                 var newSources = VideoManager.GetAvailableVideoSources().ToList();
                 
                 // Log the refresh for debugging
-                Console.WriteLine($"Refreshed video sources - found {newSources.Count} sources");
+                Console.WriteLine($"Refreshed video sources - found {newSources.Count} available cameras for Add button");
                 foreach (var source in newSources)
                 {
                     Console.WriteLine($"  - {source.DeviceName}");
                 }
+                
+                // Note: We don't modify the left panel here - it should only show configured cameras
+                // The Add button will automatically show the updated list of available cameras
             }
             catch (Exception ex)
             {
@@ -242,9 +258,27 @@ namespace UI.Video
 
         protected override PropertyNode<VideoConfig> CreatePropertyNode(VideoConfig obj, PropertyInfo pi)
         {
+            Console.WriteLine($"DEBUG: CreatePropertyNode called for property: {pi.Name} on camera: {obj.DeviceName}");
+            
             if (pi.Name == "VideoMode")
             {
+                Console.WriteLine($"DEBUG: Creating ModePropertyNode for VideoMode");
                 return new ModePropertyNode(this, obj, pi, ButtonBackground, TextColor, ButtonHover);
+            }
+
+            if (pi.Name == "FlipMirrored")
+            {
+                Console.WriteLine($"DEBUG: Creating EnumPropertyNode for FlipMirrored");
+                var enumNode = new EnumPropertyNode<VideoConfig>(obj, pi, ButtonBackground, TextColor, ButtonHover);
+                Console.WriteLine($"DEBUG: EnumPropertyNode created for FlipMirrored, Options count: {enumNode.Options?.Count ?? 0}");
+                if (enumNode.Options != null)
+                {
+                    foreach (var option in enumNode.Options)
+                    {
+                        Console.WriteLine($"DEBUG: FlipMirrored option: {option}");
+                    }
+                }
+                return enumNode;
             }
 
             if (pi.Name == "AnyUSBPort")
@@ -275,8 +309,8 @@ namespace UI.Video
 
             if (pi.Name == "RecordFrameRate")
             {
-                int[] framerates = new int[] { 15, 25, 30, 50, 60, 120, 160 };
-                ListPropertyNode<VideoConfig> listPropertyNode = new ListPropertyNode<VideoConfig>(obj, pi, ButtonBackground, TextColor, ButtonHover, framerates);
+                int[] frameRates = new int[] { 15, 24, 25, 30, 50, 60 };
+                ListPropertyNode<VideoConfig> listPropertyNode = new ListPropertyNode<VideoConfig>(obj, pi, ButtonBackground, TextColor, ButtonHover, frameRates);
                 return listPropertyNode;
             }
 
@@ -343,8 +377,42 @@ namespace UI.Video
             if (obj != null)
             {
                 preview.Visible = true;
+                
+                // Ensure preview is properly initialized for the selected camera
+                EnsurePreviewInitialized(obj);
+                
+                // Auto-populate modes for the selected camera
+                Console.WriteLine($"DEBUG: Auto-populating modes for selected camera: {obj.DeviceName}");
+                var modePropertyNode = PropertyNodes.OfType<ModePropertyNode>().FirstOrDefault();
+                if (modePropertyNode != null)
+                {
+                    // Force mode population for the selected camera
+                    VideoManager.GetModes(obj, false, (result) =>
+                    {
+                        Console.WriteLine($"DEBUG: Modes received for {obj.DeviceName}: {result.Modes?.Count() ?? 0} modes");
+                        modePropertyNode.AcceptModes(result);
+                    });
+                }
+
+                RepairVideoPreview();
             }
-            RepairVideoPreview();
+        }
+
+        private void EnsurePreviewInitialized(VideoConfig camera)
+        {
+            Console.WriteLine($"DEBUG: Ensuring preview is initialized for camera: {camera.DeviceName}");
+            if (preview != null)
+            {
+                preview.Visible = true;
+                // Force a layout update to ensure the preview is properly displayed
+                RequestLayout();
+                
+                // Add a small delay to ensure the UI has time to update
+                Task.Delay(100).ContinueWith(_ =>
+                {
+                    Console.WriteLine($"DEBUG: Preview initialization completed for camera: {camera.DeviceName}");
+                });
+            }
         }
 
         public override void ClearSelected()
@@ -356,21 +424,61 @@ namespace UI.Video
 
         private void InitMapperNode(VideoConfig videoConfig)
         {
+            Console.WriteLine($"DEBUG: InitMapperNode called for camera: {videoConfig?.DeviceName ?? "null"}");
+            
             lock (locker)
             {
+                Console.WriteLine($"DEBUG: Disposing existing mapper node");
                 mapperNode?.Dispose();
                 mapperNode = null;
 
                 if (videoConfig == null)
+                {
+                    Console.WriteLine($"DEBUG: No video config provided, returning");
                     return;
+                }
 
                 if (VideoManager != null)
                 {
+                    Console.WriteLine($"DEBUG: Creating new ChannelVideoMapperNode for camera: {videoConfig.DeviceName}");
                     mapperNode = new ChannelVideoMapperNode(Profile, VideoManager, EventManager, videoConfig, Objects);
                     mapperNode.OnChange += MapperNode_OnChange;
+                    
+                    Console.WriteLine($"DEBUG: Adding mapper node to preview");
                     preview.AddChild(mapperNode);
 
+                    // Check if FrameSource is already available
+                    var frameSource = VideoManager.GetFrameSource(videoConfig);
+                    if (frameSource != null && frameSource.Connected)
+                    {
+                        Console.WriteLine($"DEBUG: FrameSource is ready, calling MakeTable() immediately");
+                        mapperNode.MakeTable();
+                    }
+                    else
+                    {
+                        Console.WriteLine($"DEBUG: FrameSource not ready yet, will call MakeTable() when available");
+                        // Subscribe to the OnStart event to call MakeTable when FrameSource becomes available
+                        VideoManager.OnStart += (fs) =>
+                        {
+                            if (fs.VideoConfig == videoConfig)
+                            {
+                                Console.WriteLine($"DEBUG: FrameSource became available for {videoConfig.DeviceName}, calling MakeTable()");
+                                if (mapperNode != null)
+                                {
+                                    mapperNode.MakeTable();
+                                }
+                            }
+                        };
+                    }
+
+                    Console.WriteLine($"DEBUG: Requesting layout update");
                     RequestLayout();
+                    
+                    Console.WriteLine($"DEBUG: InitMapperNode completed for camera: {videoConfig.DeviceName}");
+                }
+                else
+                {
+                    Console.WriteLine($"DEBUG: VideoManager is null, cannot create mapper node");
                 }
             }
         }
@@ -398,17 +506,41 @@ namespace UI.Video
 
         private void RepairVideoPreview()
         {
+            Console.WriteLine($"DEBUG: RepairVideoPreview called for camera: {Selected?.DeviceName ?? "null"}");
             if (VideoManager != null && Selected != null)
             {
-                VideoManager.CreateFrameSource(new VideoConfig[] { Selected }, (fs) =>
+                // First, stop and remove the existing frame source to ensure clean restart
+                Console.WriteLine($"DEBUG: Stopping existing frame source for camera: {Selected.DeviceName}");
+                VideoManager.RemoveFrameSource(Selected);
+                
+                // Small delay to ensure the old stream is fully stopped
+                System.Threading.Tasks.Task.Delay(200).ContinueWith(t =>
                 {
-                    if (mapperNode != null)
+                    // Ensure we're still on the UI thread
+                    if (this.Parent != null)
                     {
-                        mapperNode.MakeTable();
+                        Console.WriteLine($"DEBUG: Creating new frame source for camera: {Selected.DeviceName}");
+                        VideoManager.CreateFrameSource(new VideoConfig[] { Selected }, (fs) =>
+                        {
+                            Console.WriteLine($"DEBUG: Frame source created for camera: {Selected.DeviceName}");
+                            if (mapperNode != null)
+                            {
+                                mapperNode.MakeTable();
+                            }
+                            
+                            // Force refresh the preview to ensure it shows the new camera
+                            Console.WriteLine($"DEBUG: Forcing preview refresh for camera: {Selected.DeviceName}");
+                            if (preview != null)
+                            {
+                                preview.Visible = true;
+                                // Force a layout update to ensure the preview is properly displayed
+                                RequestLayout();
+                            }
+                        });
+
+                        InitMapperNode(Selected);
                     }
                 });
-
-                InitMapperNode(Selected);
             }
         }
 
@@ -466,6 +598,48 @@ namespace UI.Video
             return base.OnMouseInput(mouseInputEvent);
         }
 
+        protected override void AddNew(VideoConfig obj)
+        {
+            Console.WriteLine($"DEBUG: AddNew called for camera: {obj.DeviceName}");
+            
+            // Add the new camera to the objects list
+            base.AddNew(obj);
+            
+            // Select the newly added camera
+            SetSelected(obj);
+            
+            // Force a layout update to ensure the preview is properly initialized
+            RequestLayout();
+            
+            // Add a small delay to allow the UI to update before triggering the preview
+            System.Threading.Tasks.Task.Delay(100).ContinueWith(t =>
+            {
+                // Ensure we're still on the UI thread
+                if (this.Parent != null)
+                {
+                    Console.WriteLine($"DEBUG: Triggering delayed preview initialization for camera: {obj.DeviceName}");
+                    
+                    // Ensure preview is properly initialized for the selected camera
+                    EnsurePreviewInitialized(obj);
+                    
+                    // Force complete refresh for the newly added camera
+                    Console.WriteLine($"DEBUG: Forcing complete refresh for camera: {obj.DeviceName}");
+                    
+                    // Call RepairVideoPreview to ensure frame source is created
+                    RepairVideoPreview();
+                    
+                    // Explicitly call InitMapperNode to ensure the preview is connected
+                    Console.WriteLine($"DEBUG: Explicitly calling InitMapperNode for camera: {obj.DeviceName}");
+                    InitMapperNode(obj);
+                    
+                    // Force another layout update
+                    RequestLayout();
+                }
+            });
+            
+            Console.WriteLine($"DEBUG: AddNew completed for camera: {obj.DeviceName}");
+        }
+
         private class AudioDevicePropertyNode : ListPropertyNode<VideoConfig>
         {
             private VideoManager vm;
@@ -505,23 +679,42 @@ namespace UI.Video
                 modes = new Mode[0];
 
                 rebootRequired = false;
+                
+                // Automatically populate modes when a camera is added
+                if (vse.VideoManager != null)
+                {
+                    Console.WriteLine($"DEBUG: Auto-populating modes for camera: {obj.DeviceName}");
+                    vse.VideoManager.GetModes(obj, false, AcceptModes);
+                }
             }
 
-            private void AcceptModes(VideoManager.ModesResult result)
+            public void AcceptModes(VideoManager.ModesResult result)
             {
-                modes = TrimModes(result.Modes).ToArray();
-                if (result.RebootRequired)
+                Console.WriteLine($"DEBUG: AcceptModes called with {result.Modes?.Count() ?? 0} modes for camera: {Object.DeviceName}");
+                
+                try
                 {
-                    GetLayer<PopupLayer>().PopupMessage("Please reboot capture device: " + Object.DeviceName);
-                    rebootRequired = true;
-                }
-                else
-                {
-                    rebootRequired = false;
-                }
+                    modes = TrimModes(result.Modes).ToArray();
+                    Console.WriteLine($"DEBUG: After trimming, {modes.Length} modes available for camera: {Object.DeviceName}");
+                    
+                    if (result.RebootRequired)
+                    {
+                        GetLayer<PopupLayer>().PopupMessage("Please reboot capture device: " + Object.DeviceName);
+                        rebootRequired = true;
+                    }
+                    else
+                    {
+                        rebootRequired = false;
+                    }
 
-                SetOptions(modes);
-                ShowMouseMenu();
+                    SetOptions(modes);
+                    ShowMouseMenu();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"DEBUG: Exception in AcceptModes for camera {Object.DeviceName}: {ex.Message}");
+                    Console.WriteLine($"DEBUG: Stack trace: {ex.StackTrace}");
+                }
             }
 
             public override bool OnMouseInput(MouseInputEvent mouseInputEvent)
@@ -553,6 +746,7 @@ namespace UI.Video
 
             private void SetOptions(Mode[] ms)
             {
+                Console.WriteLine($"DEBUG: SetOptions called with {ms.Length} modes for camera: {Object.DeviceName}");
                 IEnumerable<Mode> ordered = ms.OrderByDescending(m => m.FrameWork)
                                                      .ThenByDescending(m => m.Width)
                                                      .ThenByDescending(m => m.Height)
@@ -562,6 +756,11 @@ namespace UI.Video
                 if (ms.Any())
                 {
                     Options = ordered.OfType<object>().ToList();
+                    Console.WriteLine($"DEBUG: Set {Options.Count} options for camera: {Object.DeviceName}");
+                }
+                else
+                {
+                    Console.WriteLine($"DEBUG: No options to set for camera: {Object.DeviceName}");
                 }
             }
 

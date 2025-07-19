@@ -35,7 +35,7 @@ namespace ImageServer
             Index = -1;
             Width = 640;
             Height = 480;
-            FrameRate = 25;
+            FrameRate = 30;
             Format = "";
             FrameWork = FrameWork.Undecided;
         }

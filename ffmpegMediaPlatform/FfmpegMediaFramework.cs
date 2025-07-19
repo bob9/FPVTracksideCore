@@ -210,7 +210,20 @@ namespace FfmpegMediaPlatform
 
         public Mode PickMode(IEnumerable<Mode> modes)
         {
-            throw new NotImplementedException();
+            if (modes == null || !modes.Any())
+            {
+                // Return a default mode if no modes are provided
+                return new Mode { Width = 640, Height = 480, FrameRate = 30, FrameWork = FrameWork.ffmpeg, Index = 0 };
+            }
+
+            // Sort modes by preference: higher resolution, higher framerate, ffmpeg framework
+            var sortedModes = modes.OrderByDescending(m => m.FrameWork == FrameWork.ffmpeg)
+                                   .ThenByDescending(m => m.Width * m.Height)
+                                   .ThenByDescending(m => m.FrameRate)
+                                   .ThenBy(m => m.Index);
+
+            // Return the best available mode
+            return sortedModes.First();
         }
 
         public FrameSource CreateFrameSource(string filename)

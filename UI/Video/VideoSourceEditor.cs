@@ -378,6 +378,9 @@ namespace UI.Video
             {
                 preview.Visible = true;
                 
+                // Update camera information from hardware query
+                UpdateCameraInformation(obj);
+                
                 // Ensure preview is properly initialized for the selected camera
                 EnsurePreviewInitialized(obj);
                 
@@ -395,6 +398,49 @@ namespace UI.Video
                 }
 
                 RepairVideoPreview();
+            }
+        }
+
+        // New method to update camera information from hardware queries
+        private void UpdateCameraInformation(VideoConfig camera)
+        {
+            try
+            {
+                Console.WriteLine($"DEBUG: Updating camera information for: {camera.DeviceName}");
+                
+                // Get current available devices from hardware query
+                var availableSources = VideoManager.GetAvailableVideoSources().ToArray();
+                
+                // Find matching device by name
+                var matchingSource = availableSources.FirstOrDefault(s => 
+                    string.Equals(s.DeviceName, camera.DeviceName, StringComparison.OrdinalIgnoreCase));
+                
+                if (matchingSource != null)
+                {
+                    // Update ffmpegId if it has changed
+                    if (matchingSource.ffmpegId != camera.ffmpegId)
+                    {
+                        Console.WriteLine($"DEBUG: Updating ffmpegId for {camera.DeviceName}: {camera.ffmpegId} -> {matchingSource.ffmpegId}");
+                        camera.ffmpegId = matchingSource.ffmpegId;
+                    }
+                    
+                    // Update other device information if available
+                    if (matchingSource.FrameWork != camera.FrameWork)
+                    {
+                        Console.WriteLine($"DEBUG: Updating FrameWork for {camera.DeviceName}: {camera.FrameWork} -> {matchingSource.FrameWork}");
+                        camera.FrameWork = matchingSource.FrameWork;
+                    }
+                    
+                    Console.WriteLine($"DEBUG: Camera information updated successfully for: {camera.DeviceName}");
+                }
+                else
+                {
+                    Console.WriteLine($"DEBUG: WARNING - No matching hardware device found for: {camera.DeviceName}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"DEBUG: Error updating camera information for {camera.DeviceName}: {ex.Message}");
             }
         }
 
@@ -506,9 +552,15 @@ namespace UI.Video
 
         private void RepairVideoPreview()
         {
-            Console.WriteLine($"DEBUG: RepairVideoPreview called for camera: {Selected?.DeviceName ?? "null"}");
+            Console.WriteLine($"DEBUG: RepairVideoPreview called for camera: {Selected?.DeviceName ?? "null"} (ffmpegId: {Selected?.ffmpegId})");
             if (VideoManager != null && Selected != null)
             {
+                // Store the current device info before recreation
+                string originalDeviceName = Selected.DeviceName;
+                string originalFfmpegId = Selected.ffmpegId;
+                
+                Console.WriteLine($"DEBUG: Stored device info - Name: {originalDeviceName}, ffmpegId: {originalFfmpegId}");
+                
                 // First, stop and remove the existing frame source to ensure clean restart
                 Console.WriteLine($"DEBUG: Stopping existing frame source for camera: {Selected.DeviceName}");
                 VideoManager.RemoveFrameSource(Selected);
@@ -519,10 +571,44 @@ namespace UI.Video
                     // Ensure we're still on the UI thread
                     if (this.Parent != null)
                     {
-                        Console.WriteLine($"DEBUG: Creating new frame source for camera: {Selected.DeviceName}");
+                        // Verify device ID is still correct before recreation
+                        Console.WriteLine($"DEBUG: Verifying device ID before recreation for: {originalDeviceName}");
+                        
+                        // Get current available devices and update ffmpegId if needed
+                        var availableSources = VideoManager.GetAvailableVideoSources().ToArray();
+                        var matchingSource = availableSources.FirstOrDefault(s => 
+                            string.Equals(s.DeviceName, originalDeviceName, StringComparison.OrdinalIgnoreCase));
+                        
+                        if (matchingSource != null)
+                        {
+                            // Update ffmpegId if it has changed
+                            if (matchingSource.ffmpegId != Selected.ffmpegId)
+                            {
+                                Console.WriteLine($"DEBUG: Updating ffmpegId for {Selected.DeviceName}: {Selected.ffmpegId} -> {matchingSource.ffmpegId}");
+                                Selected.ffmpegId = matchingSource.ffmpegId;
+                            }
+                            Console.WriteLine($"DEBUG: Device {Selected.DeviceName} verified successfully");
+                        }
+                        else
+                        {
+                            Console.WriteLine($"DEBUG: WARNING - No matching source found for {originalDeviceName}");
+                        }
+                        
+                        Console.WriteLine($"DEBUG: Creating new frame source for camera: {Selected.DeviceName} (ffmpegId: {Selected.ffmpegId})");
                         VideoManager.CreateFrameSource(new VideoConfig[] { Selected }, (fs) =>
                         {
                             Console.WriteLine($"DEBUG: Frame source created for camera: {Selected.DeviceName}");
+                            
+                            // Final verification that we got the right camera
+                            if (Selected.DeviceName != originalDeviceName)
+                            {
+                                Console.WriteLine($"DEBUG: WARNING - Camera switched during recreation! Expected: {originalDeviceName}, Got: {Selected.DeviceName}");
+                            }
+                            else
+                            {
+                                Console.WriteLine($"DEBUG: SUCCESS - Camera recreation completed correctly for: {Selected.DeviceName}");
+                            }
+                            
                             if (mapperNode != null)
                             {
                                 mapperNode.MakeTable();

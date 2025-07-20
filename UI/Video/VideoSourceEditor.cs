@@ -33,6 +33,9 @@ namespace UI.Video
 
         private Node physicalLayoutContainer;
         private Node physicalLayout;
+        
+        // Guard to prevent multiple simultaneous RepairVideoPreview calls
+        private bool isRepairingVideoPreview = false;
 
         public Profile Profile { get; private set; }    
 
@@ -98,12 +101,27 @@ namespace UI.Video
             MouseMenu mouseMenu = new MouseMenu(this);
             mouseMenu.TopToBottom = false;
 
+            // Note: We removed the LoadDevices() call here as it was causing constant frame source recreation
+            // Instead, we rely on periodic updates and the enhanced equality checking below
+
             VideoConfig[] vcs = VideoManager.GetAvailableVideoSources().OrderBy(vc => vc.DeviceName).ToArray();
             Console.WriteLine($"DEBUG: Add button clicked - found {vcs.Length} total available cameras");
             
             foreach (VideoConfig source in vcs)
             {
-                if (!Objects.Any(r => r.Equals(source)))
+                // For USB cameras, check by DeviceName rather than full Equals() to handle ffmpegId changes
+                bool alreadyConfigured = Objects.Any(r => 
+                    r.Equals(source) || 
+                    (r.DeviceName.Equals(source.DeviceName, StringComparison.OrdinalIgnoreCase)));
+                
+                Console.WriteLine($"DEBUG: Checking camera: {source.DeviceName} (ffmpegId: {source.ffmpegId}) - alreadyConfigured: {alreadyConfigured}");
+                if (alreadyConfigured)
+                {
+                    Console.WriteLine($"DEBUG: Camera already configured, not showing in Add menu: {source.DeviceName}");
+                    Console.WriteLine($"DEBUG: Configured cameras: {string.Join(", ", Objects.Select(o => $"{o.DeviceName}(id:{o.ffmpegId})"))}");
+                }
+                    
+                if (!alreadyConfigured)
                 {
                     string sourceAsString = source.ToString();
                     if (!string.IsNullOrWhiteSpace(sourceAsString))
@@ -119,10 +137,6 @@ namespace UI.Video
                             mouseMenu.AddDisabledItem(sourceAsString);
                         }
                     }
-                }
-                else
-                {
-                    Console.WriteLine($"DEBUG: Camera already configured, not showing in Add menu: {source.DeviceName}");
                 }
             }
 
@@ -389,16 +403,111 @@ namespace UI.Video
                 var modePropertyNode = PropertyNodes.OfType<ModePropertyNode>().FirstOrDefault();
                 if (modePropertyNode != null)
                 {
+                    Console.WriteLine($"DEBUG: Found ModePropertyNode, clearing existing modes and querying new ones");
+                    
+                    // Clear existing modes first to ensure fresh data
+                    modePropertyNode.ClearModes();
+                    
                     // Force mode population for the selected camera
                     VideoManager.GetModes(obj, false, (result) =>
                     {
                         Console.WriteLine($"DEBUG: Modes received for {obj.DeviceName}: {result.Modes?.Count() ?? 0} modes");
-                        modePropertyNode.AcceptModes(result);
+                        if (result.Modes != null && result.Modes.Any())
+                        {
+                            modePropertyNode.AcceptModes(result);
+                            Console.WriteLine($"DEBUG: Successfully populated modes for {obj.DeviceName}");
+                        }
+                        else
+                        {
+                            Console.WriteLine($"DEBUG: No modes returned for {obj.DeviceName}, using fallback");
+                            // Force a second attempt with forceAll = true
+                            VideoManager.GetModes(obj, true, (fallbackResult) =>
+                            {
+                                Console.WriteLine($"DEBUG: Fallback modes received for {obj.DeviceName}: {fallbackResult.Modes?.Count() ?? 0} modes");
+                                modePropertyNode.AcceptModes(fallbackResult);
+                            });
+                        }
                     });
+                }
+                else
+                {
+                    Console.WriteLine($"DEBUG: No ModePropertyNode found for camera: {obj.DeviceName}");
                 }
 
                 RepairVideoPreview();
             }
+        }
+
+        private VideoConfig FindMatchingVideoSource(IEnumerable<VideoConfig> availableSources, string cameraDeviceName)
+        {
+            // First try exact match
+            var exactMatch = availableSources.FirstOrDefault(s => 
+                string.Equals(s.DeviceName, cameraDeviceName, StringComparison.OrdinalIgnoreCase));
+            if (exactMatch != null)
+            {
+                Console.WriteLine($"DEBUG: Found exact match for '{cameraDeviceName}' -> '{exactMatch.DeviceName}'");
+                return exactMatch;
+            }
+            
+            // For USB cameras, try flexible matching since FFmpeg reports full VID:PID but config may have short name
+            // Example: Config="USB Camera VID", Available="USB Camera VID:1133 PID:2249"
+            foreach (var source in availableSources)
+            {
+                // Check if available name starts with camera name (handles VID:PID extensions)
+                if (source.DeviceName.StartsWith(cameraDeviceName, StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine($"DEBUG: Found prefix match for '{cameraDeviceName}' -> '{source.DeviceName}'");
+                    return source;
+                }
+                
+                // Check if camera name starts with available name (reverse case)
+                if (cameraDeviceName.StartsWith(source.DeviceName, StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine($"DEBUG: Found reverse prefix match for '{cameraDeviceName}' -> '{source.DeviceName}'");
+                    return source;
+                }
+                
+                // For USB cameras, try matching VID if both contain "USB Camera"
+                if (cameraDeviceName.Contains("USB Camera") && source.DeviceName.Contains("USB Camera"))
+                {
+                    // Extract VID numbers from both names
+                    var cameraVid = ExtractVidFromName(cameraDeviceName);
+                    var sourceVid = ExtractVidFromName(source.DeviceName);
+                    
+                    if (!string.IsNullOrEmpty(cameraVid) && !string.IsNullOrEmpty(sourceVid))
+                    {
+                        if (cameraVid.Equals(sourceVid, StringComparison.OrdinalIgnoreCase))
+                        {
+                            Console.WriteLine($"DEBUG: Found VID match for '{cameraDeviceName}' -> '{source.DeviceName}' (VID: {cameraVid})");
+                            return source;
+                        }
+                    }
+                    else if (string.IsNullOrEmpty(cameraVid) && string.IsNullOrEmpty(sourceVid))
+                    {
+                        // Both are generic "USB Camera" - match them
+                        Console.WriteLine($"DEBUG: Found generic USB Camera match for '{cameraDeviceName}' -> '{source.DeviceName}'");
+                        return source;
+                    }
+                }
+            }
+            
+            Console.WriteLine($"DEBUG: No matching video source found for camera: '{cameraDeviceName}'");
+            return null;
+        }
+        
+        private string ExtractVidFromName(string deviceName)
+        {
+            // Extract VID from names like "USB Camera VID:1133 PID:2249" or "USB Camera VID"
+            var match = System.Text.RegularExpressions.Regex.Match(deviceName, @"VID(?::(\d+))?", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (match.Success && match.Groups.Count > 1 && !string.IsNullOrEmpty(match.Groups[1].Value))
+            {
+                return match.Groups[1].Value; // Return the VID number
+            }
+            else if (deviceName.Contains("VID", StringComparison.OrdinalIgnoreCase))
+            {
+                return "VID"; // Generic VID indicator
+            }
+            return null;
         }
 
         // New method to update camera information from hardware queries
@@ -411,9 +520,8 @@ namespace UI.Video
                 // Get current available devices from hardware query
                 var availableSources = VideoManager.GetAvailableVideoSources().ToArray();
                 
-                // Find matching device by name
-                var matchingSource = availableSources.FirstOrDefault(s => 
-                    string.Equals(s.DeviceName, camera.DeviceName, StringComparison.OrdinalIgnoreCase));
+                // Find matching device by name using flexible matching
+                var matchingSource = FindMatchingVideoSource(availableSources, camera.DeviceName);
                 
                 if (matchingSource != null)
                 {
@@ -553,8 +661,17 @@ namespace UI.Video
         private void RepairVideoPreview()
         {
             Console.WriteLine($"DEBUG: RepairVideoPreview called for camera: {Selected?.DeviceName ?? "null"} (ffmpegId: {Selected?.ffmpegId})");
+            
+            // Prevent multiple simultaneous repair operations
+            if (isRepairingVideoPreview)
+            {
+                Console.WriteLine($"DEBUG: RepairVideoPreview already in progress, skipping for: {Selected?.DeviceName}");
+                return;
+            }
+            
             if (VideoManager != null && Selected != null)
             {
+                isRepairingVideoPreview = true;
                 // Store the current device info before recreation
                 string originalDeviceName = Selected.DeviceName;
                 string originalFfmpegId = Selected.ffmpegId;
@@ -576,8 +693,7 @@ namespace UI.Video
                         
                         // Get current available devices and update ffmpegId if needed
                         var availableSources = VideoManager.GetAvailableVideoSources().ToArray();
-                        var matchingSource = availableSources.FirstOrDefault(s => 
-                            string.Equals(s.DeviceName, originalDeviceName, StringComparison.OrdinalIgnoreCase));
+                        var matchingSource = FindMatchingVideoSource(availableSources, originalDeviceName);
                         
                         if (matchingSource != null)
                         {
@@ -622,11 +738,19 @@ namespace UI.Video
                                 // Force a layout update to ensure the preview is properly displayed
                                 RequestLayout();
                             }
+                            
+                            // Clear the repair flag now that we're done
+                            isRepairingVideoPreview = false;
                         });
 
                         InitMapperNode(Selected);
                     }
                 });
+            }
+            else
+            {
+                // Clear the flag if we exit early
+                isRepairingVideoPreview = false;
             }
         }
 
@@ -772,6 +896,14 @@ namespace UI.Video
                     Console.WriteLine($"DEBUG: Auto-populating modes for camera: {obj.DeviceName}");
                     vse.VideoManager.GetModes(obj, false, AcceptModes);
                 }
+            }
+
+            public void ClearModes()
+            {
+                Console.WriteLine($"DEBUG: ClearModes called for camera: {Object.DeviceName}");
+                modes = new Mode[0];
+                Options = null;
+                rebootRequired = false;
             }
 
             public void AcceptModes(VideoManager.ModesResult result)

@@ -188,7 +188,9 @@ namespace FfmpegMediaPlatform
                     {
                         // Try to parse the stream information
                         // Handle both normal framerates and 1080p's "1000k tbr" case
-                        Regex reg = new Regex("([0-9]*)x([0-9]*), ([0-9]*k?) tbr");
+                        // Pattern: uyvy422, 1280x960, 14.92 tbr, 1000k tbn
+                        // Use word boundary and comma to ensure we match the resolution, not hex values
+                        Regex reg = new Regex(@", (\d+)x(\d+), .*?(\d+(?:\.\d+)?k?) tbr");
                         Match m = reg.Match(e.Data);
                         if (m.Success) 
                         {
@@ -482,7 +484,7 @@ namespace FfmpegMediaPlatform
                             }
                             else if (totalRead > 0)
                             {
-                                // Check if this is a resolution mismatch (common with 1080p cameras falling back to 720p)
+                                // Check if this is a resolution mismatch (common with USB cameras)
                                 // Calculate expected frame size based on format
                                 int expectedBytesPerPixel = (width >= 1920 && height >= 1080) ? 3 : 2; // yuv420p = 1.5, uyvy422 = 2
                                 int expectedFrameSize = width * height * expectedBytesPerPixel / 2;
@@ -494,9 +496,9 @@ namespace FfmpegMediaPlatform
                                 // Try to find reasonable width/height combinations
                                 int actualWidth = 0, actualHeight = 0;
                                 
-                                // Common resolutions to check
-                                int[] commonWidths = { 640, 1280, 1920, 2560, 3840 };
-                                int[] commonHeights = { 480, 720, 1080, 1440, 2160 };
+                                // Common resolutions to check (including USB camera common resolutions)
+                                int[] commonWidths = { 160, 240, 320, 640, 800, 1280, 1920, 2560, 3840 };
+                                int[] commonHeights = { 120, 128, 240, 480, 600, 720, 1080, 1440, 2160 };
                                 
                                 foreach (int w in commonWidths)
                                 {
@@ -529,6 +531,13 @@ namespace FfmpegMediaPlatform
                                 {
                                     string format = (width >= 1920 && height >= 1080) ? "YUV420P" : "UYVY422";
                                     Logger.VideoLog.Log(this, $"Resolution mismatch detected: expected {width}x{height} ({expectedFrameSize} bytes, {format}), got {actualWidth}x{actualHeight} ({totalRead} bytes)");
+                                    
+                                    // For USB cameras, be more flexible with resolution changes
+                                    bool isUsbCamera = VideoConfig.DeviceName.Contains("USB Camera");
+                                    if (isUsbCamera)
+                                    {
+                                        Logger.VideoLog.Log(this, $"USB camera detected, allowing resolution change from {width}x{height} to {actualWidth}x{actualHeight}");
+                                    }
                                     
                                     // Update dimensions to match actual output
                                     width = actualWidth;

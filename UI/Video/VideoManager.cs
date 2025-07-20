@@ -141,7 +141,364 @@ namespace UI.Video
             VideoConfigs.Clear();
             VideoConfigs.AddRange(VideoConfig.Read(Profile));
 
+            // Update ffmpegId values for macOS cameras based on actual detected devices
+            UpdateFfmpegIdsForMacCameras();
+
             StartThread();
+        }
+
+        private void UpdateFfmpegIdsForMacCameras()
+        {
+            try
+            {
+                Logger.VideoLog.Log(this, "Updating ffmpegId values for macOS cameras using direct FFmpeg call");
+                Console.WriteLine("DEBUG: Updating ffmpegId values for macOS cameras using direct FFmpeg call");
+                
+                // Call FFmpeg directly to get the actual camera list
+                string ffmpegCommand = "-f avfoundation -list_devices true -i dummy";
+                var ffmpegFramework = new FfmpegMediaPlatform.FfmpegMediaFramework();
+                var ffmpegOutput = ffmpegFramework.GetFfmpegText(ffmpegCommand).ToList();
+                
+                Console.WriteLine($"DEBUG: Raw FFmpeg camera list output:");
+                foreach (var line in ffmpegOutput)
+                {
+                    Console.WriteLine($"DEBUG: {line}");
+                }
+                
+                // Parse the FFmpeg output to extract camera names and their ffmpegIds
+                var detectedCameras = ParseFfmpegCameraList(ffmpegOutput);
+                
+                Console.WriteLine($"DEBUG: Parsed {detectedCameras.Count} cameras from FFmpeg output:");
+                foreach (var camera in detectedCameras)
+                {
+                    Console.WriteLine($"DEBUG: Camera ID {camera.ffmpegId}: {camera.DeviceName}");
+                }
+                
+                // Loop through each detected camera and update the configuration
+                bool anyUpdates = false;
+                foreach (var detectedCamera in detectedCameras)
+                {
+                    // Look up the camera configuration using flexible name matching
+                    var matchingConfig = FindMatchingConfig(VideoConfigs, detectedCamera.DeviceName);
+                    if (matchingConfig != null)
+                    {
+                        if (matchingConfig.ffmpegId != detectedCamera.ffmpegId)
+                        {
+                            Logger.VideoLog.Log(this, $"VideoManager: Updated ffmpegId for {matchingConfig.DeviceName}: {matchingConfig.ffmpegId} -> {detectedCamera.ffmpegId}");
+                            Console.WriteLine($"DEBUG: Updated ffmpegId for {matchingConfig.DeviceName}: {matchingConfig.ffmpegId} -> {detectedCamera.ffmpegId}");
+                            matchingConfig.ffmpegId = detectedCamera.ffmpegId;
+                            anyUpdates = true;
+                        }
+                        else
+                        {
+                            Console.WriteLine($"DEBUG: Camera {matchingConfig.DeviceName} already has correct ffmpegId: {matchingConfig.ffmpegId}");
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine($"DEBUG: No configuration found for detected camera: {detectedCamera.DeviceName} (ID: {detectedCamera.ffmpegId})");
+                    }
+                }
+
+                if (anyUpdates)
+                {
+                    Logger.VideoLog.Log(this, "VideoManager: Saving updated camera configurations with corrected ffmpegId values");
+                    Console.WriteLine("DEBUG: Saving updated camera configurations with corrected ffmpegId values");
+                    WriteCurrentDeviceConfig();
+                }
+                else
+                {
+                    Logger.VideoLog.Log(this, "VideoManager: No updates needed - all cameras already have correct IDs");
+                    Console.WriteLine("DEBUG: No updates needed - all cameras already have correct IDs");
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.VideoLog.LogException(this, ex);
+                Console.WriteLine($"DEBUG: Exception in UpdateFfmpegIdsForMacCameras: {ex.Message}");
+            }
+        }
+        
+        private VideoConfig FindMatchingConfig(IEnumerable<VideoConfig> configs, string detectedDeviceName)
+        {
+            // First try exact match
+            var exactMatch = configs.FirstOrDefault(c => c.DeviceName == detectedDeviceName);
+            if (exactMatch != null)
+            {
+                Console.WriteLine($"DEBUG: Found exact match for '{detectedDeviceName}' -> '{exactMatch.DeviceName}'");
+                return exactMatch;
+            }
+            
+            // For USB cameras, try flexible matching since FFmpeg reports full VID:PID but config may have short name
+            // Example: Config="USB Camera VID", Detected="USB Camera VID:1133 PID:2249"
+            foreach (var config in configs)
+            {
+                // Check if detected name starts with config name (handles VID:PID extensions)
+                if (detectedDeviceName.StartsWith(config.DeviceName, StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine($"DEBUG: Found prefix match for '{detectedDeviceName}' -> '{config.DeviceName}'");
+                    return config;
+                }
+                
+                // Check if config name starts with detected name (reverse case)
+                if (config.DeviceName.StartsWith(detectedDeviceName, StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine($"DEBUG: Found reverse prefix match for '{detectedDeviceName}' -> '{config.DeviceName}'");
+                    return config;
+                }
+                
+                // For USB cameras, try matching just the base "USB Camera" part
+                if (detectedDeviceName.Contains("USB Camera") && config.DeviceName.Contains("USB Camera"))
+                {
+                    // Extract the VID part if present in both
+                    var detectedVid = ExtractVidFromDeviceName(detectedDeviceName);
+                    var configVid = ExtractVidFromDeviceName(config.DeviceName);
+                    
+                    if (!string.IsNullOrEmpty(detectedVid) && !string.IsNullOrEmpty(configVid))
+                    {
+                        if (detectedVid.Equals(configVid, StringComparison.OrdinalIgnoreCase))
+                        {
+                            Console.WriteLine($"DEBUG: Found VID match for '{detectedDeviceName}' -> '{config.DeviceName}' (VID: {detectedVid})");
+                            return config;
+                        }
+                    }
+                    else if (string.IsNullOrEmpty(detectedVid) && string.IsNullOrEmpty(configVid))
+                    {
+                        // Both are generic "USB Camera" - match them
+                        Console.WriteLine($"DEBUG: Found generic USB Camera match for '{detectedDeviceName}' -> '{config.DeviceName}'");
+                        return config;
+                    }
+                }
+            }
+            
+            Console.WriteLine($"DEBUG: No matching config found for detected device: '{detectedDeviceName}'");
+            return null;
+        }
+        
+        private string ExtractVidFromDeviceName(string deviceName)
+        {
+            // Extract VID from names like "USB Camera VID:1133 PID:2249" or "USB Camera VID"
+            var match = System.Text.RegularExpressions.Regex.Match(deviceName, @"VID(?::(\d+))?", RegexOptions.IgnoreCase);
+            if (match.Success && match.Groups.Count > 1 && !string.IsNullOrEmpty(match.Groups[1].Value))
+            {
+                return match.Groups[1].Value; // Return the VID number
+            }
+            else if (deviceName.Contains("VID", StringComparison.OrdinalIgnoreCase))
+            {
+                return "VID"; // Generic VID indicator
+            }
+            return null;
+        }
+
+        private List<VideoConfig> ParseFfmpegCameraList(List<string> ffmpegOutput)
+        {
+            var cameras = new List<VideoConfig>();
+            
+            try
+            {
+                foreach (string line in ffmpegOutput)
+                {
+                    // Look for lines like: "[0] FaceTime HD Camera" or "[1] USB Camera VID:1133 PID:2249"
+                    var match = System.Text.RegularExpressions.Regex.Match(line, @"\[(\d+)\]\s+(.+)");
+                    if (match.Success)
+                    {
+                        string ffmpegId = match.Groups[1].Value;
+                        string deviceName = match.Groups[2].Value.Trim();
+                        
+                        // Create a temporary VideoConfig to store the detected camera info
+                        var camera = new VideoConfig
+                        {
+                            ffmpegId = ffmpegId,
+                            DeviceName = deviceName,
+                            VideoMode = new Mode { Width = 640, Height = 480, FrameRate = 30 } // Default values
+                        };
+                        
+                        cameras.Add(camera);
+                        Console.WriteLine($"DEBUG: Parsed camera: ID={ffmpegId}, Name={deviceName}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"DEBUG: Exception parsing FFmpeg camera list: {ex.Message}");
+            }
+            
+            return cameras;
+        }
+
+        private bool UpdateCameraResolution(VideoConfig videoConfig)
+        {
+            try
+            {
+                Logger.VideoLog.Log(this, $"Querying camera capabilities for {videoConfig.DeviceName} (ffmpegId: {videoConfig.ffmpegId})");
+                
+                // Create a temporary frame source to query camera capabilities
+                var frameWork = VideoFrameWorks.Available.FirstOrDefault(f => f.FrameWork == FrameWork.ffmpeg);
+                if (frameWork == null)
+                {
+                    Logger.VideoLog.Log(this, "No ffmpeg framework available for camera capability query");
+                    return false;
+                }
+                
+                var tempFrameSource = frameWork.CreateFrameSource(videoConfig);
+                if (tempFrameSource == null)
+                {
+                    Logger.VideoLog.Log(this, $"Failed to create temporary frame source for {videoConfig.DeviceName}");
+                    return false;
+                }
+                
+                try
+                {
+                    // Query available modes
+                    var availableModes = tempFrameSource.GetModes().ToList();
+                    Logger.VideoLog.Log(this, $"Found {availableModes.Count} available modes for {videoConfig.DeviceName}");
+                    
+                    foreach (var mode in availableModes)
+                    {
+                        Logger.VideoLog.Log(this, $"  Mode: {mode.Width}x{mode.Height}@{mode.FrameRate}fps");
+                    }
+                    
+                    if (availableModes.Any())
+                    {
+                        // Find the best available mode (prefer 1080p, then 720p, then highest resolution)
+                        Mode bestMode = null;
+                        
+                        // First try to find 1080p
+                        bestMode = availableModes.FirstOrDefault(m => m.Width == 1920 && m.Height == 1080);
+                        
+                        // If no 1080p, try 720p
+                        if (bestMode == null)
+                        {
+                            bestMode = availableModes.FirstOrDefault(m => m.Width == 1280 && m.Height == 720);
+                        }
+                        
+                        // If no 720p, take the highest resolution available
+                        if (bestMode == null)
+                        {
+                            bestMode = availableModes.OrderByDescending(m => m.Width * m.Height).First();
+                        }
+                        
+                        if (bestMode != null)
+                        {
+                            // Check if the current mode is different from the best available mode
+                            var currentMode = videoConfig.VideoMode;
+                            if (currentMode.Width != bestMode.Width || 
+                                currentMode.Height != bestMode.Height || 
+                                currentMode.FrameRate != bestMode.FrameRate)
+                            {
+                                Logger.VideoLog.Log(this, $"Updating resolution for {videoConfig.DeviceName}: {currentMode.Width}x{currentMode.Height}@{currentMode.FrameRate}fps -> {bestMode.Width}x{bestMode.Height}@{bestMode.FrameRate}fps");
+                                
+                                videoConfig.VideoMode.Width = bestMode.Width;
+                                videoConfig.VideoMode.Height = bestMode.Height;
+                                videoConfig.VideoMode.FrameRate = bestMode.FrameRate;
+                                videoConfig.VideoMode.Format = bestMode.Format;
+                                videoConfig.VideoMode.FrameWork = bestMode.FrameWork;
+                                
+                                return true;
+                            }
+                            else
+                            {
+                                Logger.VideoLog.Log(this, $"Resolution for {videoConfig.DeviceName} is already optimal: {bestMode.Width}x{bestMode.Height}@{bestMode.FrameRate}fps");
+                            }
+                        }
+                    }
+                    else
+                    {
+                        Logger.VideoLog.Log(this, $"No available modes found for {videoConfig.DeviceName}");
+                    }
+                }
+                finally
+                {
+                    // Clean up temporary frame source
+                    try
+                    {
+                        tempFrameSource.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.VideoLog.LogException(this, ex);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.VideoLog.LogException(this, ex);
+                Logger.VideoLog.Log(this, $"Failed to update resolution for {videoConfig.DeviceName}");
+            }
+            
+            return false;
+        }
+
+        /// <summary>
+        /// Updates the ffmpegId for a specific camera when it's changed in the UI
+        /// </summary>
+        public void UpdateCameraFfmpegId(VideoConfig videoConfig, string newDeviceName)
+        {
+            try
+            {
+                Logger.VideoLog.Log(this, $"Updating camera ffmpegId for device change: {videoConfig.DeviceName} -> {newDeviceName}");
+                
+                // Get all available video sources
+                var availableSources = GetAvailableVideoSources().ToList();
+                
+                // Find the new device
+                var newDevice = availableSources.FirstOrDefault(s => s.DeviceName.Equals(newDeviceName, StringComparison.OrdinalIgnoreCase));
+                
+                if (newDevice != null)
+                {
+                    string oldFfmpegId = videoConfig.ffmpegId;
+                    string oldDeviceName = videoConfig.DeviceName;
+                    
+                    // Update the device name and ffmpegId
+                    videoConfig.DeviceName = newDevice.DeviceName;
+                    videoConfig.ffmpegId = newDevice.ffmpegId;
+                    
+                    Logger.VideoLog.Log(this, $"Updated camera: {oldDeviceName} (ffmpegId: {oldFfmpegId}) -> {videoConfig.DeviceName} (ffmpegId: {videoConfig.ffmpegId})");
+                    
+                    // Update resolution for the new camera
+                    var updatedResolution = UpdateCameraResolution(videoConfig);
+                    if (updatedResolution)
+                    {
+                        Logger.VideoLog.Log(this, $"Updated resolution for {videoConfig.DeviceName} to match new camera capabilities");
+                    }
+                    
+                    // Save the updated configuration
+                    WriteCurrentDeviceConfig();
+                    
+                    // Recreate frame sources to use the new camera
+                    CreateFrameSource(VideoConfigs, (newFrameSources) => 
+                    {
+                        frameSources.Clear();
+                        frameSources.AddRange(newFrameSources);
+                    });
+                }
+                else
+                {
+                    Logger.VideoLog.Log(this, $"Device '{newDeviceName}' not found in available sources");
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.VideoLog.LogException(this, ex);
+                Logger.VideoLog.Log(this, $"Failed to update camera ffmpegId for {videoConfig.DeviceName}");
+            }
+        }
+
+        /// <summary>
+        /// Gets a list of available camera names for UI selection
+        /// </summary>
+        public List<string> GetAvailableCameraNames()
+        {
+            try
+            {
+                var availableSources = GetAvailableVideoSources().ToList();
+                return availableSources.Select(s => s.DeviceName).ToList();
+            }
+            catch (Exception ex)
+            {
+                Logger.VideoLog.LogException(this, ex);
+                return new List<string>();
+            }
         }
 
         public void StartThread()

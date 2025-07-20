@@ -708,7 +708,8 @@ namespace UI.Video
                     }
 
                     SetOptions(modes);
-                    ShowMouseMenu();
+                    // Don't automatically show the menu - only show when user clicks
+                    // ShowMouseMenu(); // REMOVED THIS LINE
                 }
                 catch (Exception ex)
                 {
@@ -736,7 +737,8 @@ namespace UI.Video
                     {
                         // just use the cached ones..
                         SetOptions(modes);
-                        return base.OnMouseInput(mouseInputEvent);
+                        ShowMouseMenu();
+                        return true;
                     }
 
                     return true;

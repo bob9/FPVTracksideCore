@@ -18,22 +18,9 @@ namespace FfmpegMediaPlatform
 
         protected override ProcessStartInfo GetProcessStartInfo()
         {
-            string ffmpegArgs;
-            
-            // Try yuv420p format first for better 1080p compatibility
-            if (VideoConfig.VideoMode.Width >= 1920 && VideoConfig.VideoMode.Height >= 1080)
-            {
-                // For 1080p, use yuv420p format which works better with MacBook Pro camera
-                ffmpegArgs = $"-f avfoundation -framerate {VideoConfig.VideoMode.FrameRate} -video_size {VideoConfig.VideoMode.Width}x{VideoConfig.VideoMode.Height} -i \"{VideoConfig.ffmpegId}\" -pix_fmt yuv420p -f rawvideo -";
-                Logger.VideoLog.Log(this, $"Using yuv420p format for 1080p compatibility");
-            }
-            else
-            {
-                // For lower resolutions, use uyvy422 for better performance
-                ffmpegArgs = $"-f avfoundation -framerate {VideoConfig.VideoMode.FrameRate} -video_size {VideoConfig.VideoMode.Width}x{VideoConfig.VideoMode.Height} -i \"{VideoConfig.ffmpegId}\" -pix_fmt uyvy422 -f rawvideo -";
-            }
-            
-            Logger.VideoLog.Log(this, $"FFmpeg args: {ffmpegArgs}");
+            // Use rgba format for direct Texture2D upload - no conversion needed
+            string ffmpegArgs = $"-f avfoundation -framerate {VideoConfig.VideoMode.FrameRate} -video_size {VideoConfig.VideoMode.Width}x{VideoConfig.VideoMode.Height} -i \"{VideoConfig.ffmpegId}\" -pix_fmt rgba -f rawvideo -";
+            Logger.VideoLog.Log(this, $"Using rgba format for direct Texture2D upload - no conversion overhead");
             
             return new ProcessStartInfo
             {
@@ -122,7 +109,7 @@ namespace FfmpegMediaPlatform
             mode1.FrameRate = 15;
             mode1.FrameWork = FrameWork.ffmpeg;
             mode1.Index = 0;
-            mode1.Format = "uyvy422";
+            mode1.Format = "rgba";
             modes.Add(mode1);
             
             var mode2 = new Mode();
@@ -131,7 +118,7 @@ namespace FfmpegMediaPlatform
             mode2.FrameRate = 30;
             mode2.FrameWork = FrameWork.ffmpeg;
             mode2.Index = 1;
-            mode2.Format = "uyvy422";
+            mode2.Format = "rgba";
             modes.Add(mode2);
             
             var mode3 = new Mode();
@@ -140,7 +127,7 @@ namespace FfmpegMediaPlatform
             mode3.FrameRate = 15;
             mode3.FrameWork = FrameWork.ffmpeg;
             mode3.Index = 2;
-            mode3.Format = "uyvy422";
+            mode3.Format = "rgba";
             modes.Add(mode3);
             
             var mode4 = new Mode();
@@ -149,7 +136,7 @@ namespace FfmpegMediaPlatform
             mode4.FrameRate = 30;
             mode4.FrameWork = FrameWork.ffmpeg;
             mode4.Index = 3;
-            mode4.Format = "uyvy422";
+            mode4.Format = "rgba";
             modes.Add(mode4);
             
             // Include 1080p modes - we'll work on making them work
@@ -159,7 +146,7 @@ namespace FfmpegMediaPlatform
             mode5.FrameRate = 15;
             mode5.FrameWork = FrameWork.ffmpeg;
             mode5.Index = 4;
-            mode5.Format = "uyvy422";
+            mode5.Format = "rgba";
             modes.Add(mode5);
             
             var mode6 = new Mode();
@@ -168,7 +155,7 @@ namespace FfmpegMediaPlatform
             mode6.FrameRate = 30;
             mode6.FrameWork = FrameWork.ffmpeg;
             mode6.Index = 5;
-            mode6.Format = "uyvy422";
+            mode6.Format = "rgba";
             modes.Add(mode6);
             
             return modes;

@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using Tools;
 
 namespace FfmpegMediaPlatform
 {
@@ -124,10 +125,23 @@ namespace FfmpegMediaPlatform
 
         public FrameSource CreateFrameSource(VideoConfig vc)
         {
-            if (dshow)
-                return new FfmpegDshowFrameSource(this, vc);
-            else
+            // Use direct RGBA pipeline for optimal performance - no HTTP streaming overhead
+            Logger.VideoLog.Log(this, $"Creating direct RGBA frame source for camera: {vc.DeviceName}");
+            
+            if (avfoundation)
+            {
                 return new FfmpegAvFoundationFrameSource(this, vc);
+            }
+            else if (dshow)
+            {
+                return new FfmpegDshowFrameSource(this, vc);
+            }
+            else
+            {
+                // Fallback to HTTP streaming if no direct capture method is available
+                Logger.VideoLog.Log(this, $"No direct capture method available, falling back to HTTP streaming for camera: {vc.DeviceName}");
+                return new HttpStreamFrameSource(this, vc);
+            }
         }
 
         public IEnumerable<VideoConfig> GetVideoConfigs()

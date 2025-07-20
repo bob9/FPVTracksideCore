@@ -1408,7 +1408,15 @@ namespace UI.Video
 
             VideoConfig videoConfig = ChannelVideoInfo.FrameSource.VideoConfig;
 
-            FrameNode = new FrameNode(ChannelVideoInfo.FrameSource);
+            // Check if this is an HTTP stream frame source
+            if (ChannelVideoInfo.FrameSource is FfmpegMediaPlatform.HttpStreamFrameSource httpStreamSource)
+            {
+                FrameNode = new HttpStreamFrameNode(httpStreamSource);
+            }
+            else
+            {
+                FrameNode = new FrameNode(ChannelVideoInfo.FrameSource);
+            }
             FrameNode.RelativeSourceBounds = ChannelVideoInfo.ScaledRelativeSourceBounds;
             FrameNode.KeepAspectRatio = true;
             AddChild(FrameNode);

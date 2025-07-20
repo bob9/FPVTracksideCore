@@ -40,7 +40,7 @@ namespace FfmpegMediaPlatform
         protected override ProcessStartInfo GetProcessStartInfo()
         {
             string name = VideoConfig.DeviceName;
-            return ffmpegMediaFramework.GetProcessStartInfo("-f dshow -i video=\"" + name + "\" -pix_fmt rgb32 -f rawvideo -");
+            return ffmpegMediaFramework.GetProcessStartInfo("-f dshow -i video=\"" + name + "\" -pix_fmt rgba -f rawvideo -");
         }
     }
 }

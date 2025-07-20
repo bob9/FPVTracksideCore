@@ -29,8 +29,20 @@ namespace UI.Video
         public event Action<CamNode> OnFullScreenRequest;
 
         public CamNode(FrameSource s, VideoBounds videoBounds)
-            : this (new FrameNode(s), videoBounds)
+            : this (CreateFrameNode(s), videoBounds)
         {
+        }
+
+        private static FrameNode CreateFrameNode(FrameSource source)
+        {
+            // Check if this is an HTTP stream frame source
+            if (source is FfmpegMediaPlatform.HttpStreamFrameSource httpStreamSource)
+            {
+                return new HttpStreamFrameNode(httpStreamSource);
+            }
+            
+            // Default to regular frame node
+            return new FrameNode(source);
         }
 
         public CamNode(FrameNode frameNode, VideoBounds videoBounds)

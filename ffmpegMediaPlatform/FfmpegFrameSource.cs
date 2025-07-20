@@ -199,23 +199,11 @@ namespace FfmpegMediaPlatform
                                 Logger.VideoLog.Log(this, $"DEBUG: Setting dimensions from stream info: width={width}, height={height}");
                             }
 
-                            // Calculate frame size based on format
-                            // For 1080p, we use yuv420p (1.5 bytes per pixel), otherwise uyvy422 (2 bytes per pixel)
-                            int frameSize;
-                            if (width >= 1920 && height >= 1080)
-                            {
-                                // YUV420P format: 1.5 bytes per pixel
-                                frameSize = width * height * 3 / 2;
-                            }
-                            else
-                            {
-                                // UYVY422 format: 2 bytes per pixel
-                                frameSize = width * height * 2;
-                            }
+                            // Calculate frame size for RGBA format (4 bytes per pixel)
+                            int frameSize = width * height * 4;
                             
                             buffer = new byte[frameSize];
-                            double bytesPerPixel = (width >= 1920 && height >= 1080) ? 1.5 : 2.0;
-                            Logger.VideoLog.Log(this, $"DEBUG: Allocated buffer for {width}x{height} with {bytesPerPixel} bytes per pixel: {frameSize} bytes");
+                            Logger.VideoLog.Log(this, $"DEBUG: Allocated buffer for {width}x{height} with 4 bytes per pixel (RGBA): {frameSize} bytes");
                             
                             // Update rawTextures with the correct dimensions
                             if (rawTextures != null)
@@ -225,7 +213,7 @@ namespace FfmpegMediaPlatform
                             rawTextures = new XBuffer<RawTexture>(5, width, height);
                             
                             inited = true;
-                            Logger.VideoLog.Log(this, $"Video stream initialized: {width}x{height} ({(width >= 1920 && height >= 1080 ? "YUV420P" : "UYVY422")} input -> RGBA output)");
+                            Logger.VideoLog.Log(this, $"Video stream initialized: {width}x{height} (RGBA input -> RGBA output, no conversion needed)");
                             
                             // Check if this is 1080p with framerate detection issues
                             string framerateStr = m.Groups[3].Value;
@@ -425,24 +413,13 @@ namespace FfmpegMediaPlatform
                     // The buffer was allocated based on the actual stream dimensions, not the reported ones
                     int actualFrameSize = buffer.Length;
                     
-                    // Determine format based on buffer size vs expected size
-                    bool isYuv420p = false;
-                    if (width >= 1920 && height >= 1080)
-                    {
-                        // Check if this is actually yuv420p by comparing buffer size
-                        int expectedUyvy422 = width * height * 2;
-                        int expectedYuv420p = width * height * 3 / 2;
-                        
-                        if (Math.Abs(actualFrameSize - expectedYuv420p) < Math.Abs(actualFrameSize - expectedUyvy422))
-                        {
-                            isYuv420p = true;
-                        }
-                    }
+                    // RGBA format: 4 bytes per pixel
+                    int expectedFrameSize = width * height * 4;
                     
                     // Add debugging for frame size issues
                     if (width == 1920 && height == 1080)
                     {
-                        Logger.VideoLog.Log(this, $"DEBUG: Frame reading - width={width}, height={height}, actualFrameSize={actualFrameSize}, buffer.Length={buffer?.Length ?? 0}, format={(isYuv420p ? "yuv420p" : "uyvy422")}");
+                        Logger.VideoLog.Log(this, $"DEBUG: Frame reading - width={width}, height={height}, actualFrameSize={actualFrameSize}, buffer.Length={buffer?.Length ?? 0}, format=rgba");
                     }
                     
                     if (buffer != null && buffer.Length >= actualFrameSize)
@@ -483,13 +460,11 @@ namespace FfmpegMediaPlatform
                             else if (totalRead > 0)
                             {
                                 // Check if this is a resolution mismatch (common with 1080p cameras falling back to 720p)
-                                // Calculate expected frame size based on format
-                                int expectedBytesPerPixel = (width >= 1920 && height >= 1080) ? 3 : 2; // yuv420p = 1.5, uyvy422 = 2
-                                int expectedFrameSize = width * height * expectedBytesPerPixel / 2;
+                                // RGBA format: 4 bytes per pixel
+                                int expectedFrameSizeForResolution = width * height * 4;
                                 
-                                // For UYVY422: frameSize = width * height * 2, so width * height = totalRead / 2
-                                // For YUV420P: frameSize = width * height * 1.5, so width * height = totalRead / 1.5
-                                int pixels = (width >= 1920 && height >= 1080) ? (totalRead * 2 / 3) : (totalRead / 2);
+                                // For RGBA: frameSize = width * height * 4, so width * height = totalRead / 4
+                                int pixels = totalRead / 4;
                                 
                                 // Try to find reasonable width/height combinations
                                 int actualWidth = 0, actualHeight = 0;
@@ -527,16 +502,14 @@ namespace FfmpegMediaPlatform
                                 
                                 if (actualWidth > 0 && actualHeight > 0 && (actualWidth != width || actualHeight != height))
                                 {
-                                    string format = (width >= 1920 && height >= 1080) ? "YUV420P" : "UYVY422";
-                                    Logger.VideoLog.Log(this, $"Resolution mismatch detected: expected {width}x{height} ({expectedFrameSize} bytes, {format}), got {actualWidth}x{actualHeight} ({totalRead} bytes)");
+                                    Logger.VideoLog.Log(this, $"Resolution mismatch detected: expected {width}x{height} ({expectedFrameSizeForResolution} bytes, RGBA), got {actualWidth}x{actualHeight} ({totalRead} bytes)");
                                     
                                     // Update dimensions to match actual output
                                     width = actualWidth;
                                     height = actualHeight;
                                     
-                                    // Recalculate frame size with new dimensions
-                                    int newBytesPerPixel = (width >= 1920 && height >= 1080) ? 3 : 2;
-                                    actualFrameSize = width * height * newBytesPerPixel / 2; // Recalculate actualFrameSize
+                                    // Recalculate frame size with new dimensions (RGBA: 4 bytes per pixel)
+                                    actualFrameSize = width * height * 4;
                                     
                                     // Reallocate buffer with correct size
                                     buffer = new byte[actualFrameSize];
@@ -555,7 +528,7 @@ namespace FfmpegMediaPlatform
                                 }
                                 else
                                 {
-                                    Logger.VideoLog.Log(this, $"Incomplete frame read: {totalRead}/{expectedFrameSize} bytes - continuing");
+                                    Logger.VideoLog.Log(this, $"Incomplete frame read: {totalRead}/{expectedFrameSizeForResolution} bytes - continuing");
                                 }
                                 // Just continue to next iteration
                                 continue;
@@ -597,45 +570,10 @@ namespace FfmpegMediaPlatform
                 RawTexture frame;
                 if (currentRawTextures.GetWritable(out frame))
                 {
-                    // Convert UYVY422 to RGBA for MonoGame SurfaceFormat.Color compatibility
-                    // UYVY422 = 2 bytes per pixel packed format (U Y0 V Y1 for 2 pixels) - true camera native
-                    byte[] rgbaBuffer = new byte[width * height * 4]; // RGBA = 4 bytes per pixel
-                    
-                    for (int i = 0; i < width * height / 2; i++) // Process 2 pixels at a time
-                    {
-                        int bufferIndex = i * 4; // UYVY422: 4 bytes for 2 pixels
-                        int rgbaIndex = i * 8;   // RGBA: 8 bytes for 2 pixels
-                        
-                        byte u = buffer[bufferIndex];
-                        byte y0 = buffer[bufferIndex + 1];
-                        byte v = buffer[bufferIndex + 2];
-                        byte y1 = buffer[bufferIndex + 3];
-                        
-                        // Convert YUV to RGB using ITU-R BT.601 standard
-                        // Pixel 1
-                        int r0 = (int)(y0 + 1.402 * (v - 128));
-                        int g0 = (int)(y0 - 0.344 * (u - 128) - 0.714 * (v - 128));
-                        int b0 = (int)(y0 + 1.772 * (u - 128));
-                        
-                        // Pixel 2
-                        int r1 = (int)(y1 + 1.402 * (v - 128));
-                        int g1 = (int)(y1 - 0.344 * (u - 128) - 0.714 * (v - 128));
-                        int b1 = (int)(y1 + 1.772 * (u - 128));
-                        
-                        // Clamp values and set RGBA
-                        rgbaBuffer[rgbaIndex] = (byte)Clamp(r0);     // R
-                        rgbaBuffer[rgbaIndex + 1] = (byte)Clamp(g0); // G
-                        rgbaBuffer[rgbaIndex + 2] = (byte)Clamp(b0); // B
-                        rgbaBuffer[rgbaIndex + 3] = 255;             // A
-                        
-                        rgbaBuffer[rgbaIndex + 4] = (byte)Clamp(r1); // R
-                        rgbaBuffer[rgbaIndex + 5] = (byte)Clamp(g1); // G
-                        rgbaBuffer[rgbaIndex + 6] = (byte)Clamp(b1); // B
-                        rgbaBuffer[rgbaIndex + 7] = 255;             // A
-                    }
-                    
+                    // RGBA format: direct copy - no conversion needed
+                    // Buffer already contains RGBA data (4 bytes per pixel)
                     FrameProcessNumber++;
-                    frame.SetData(rgbaBuffer, SampleTime, FrameProcessNumber);
+                    frame.SetData(buffer, SampleTime, FrameProcessNumber);
                     currentRawTextures.WriteOne(frame);
                     NotifyReceivedFrame();
                 }

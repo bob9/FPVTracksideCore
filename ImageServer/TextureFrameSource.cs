@@ -180,6 +180,21 @@ namespace ImageServer
                 }
                 texture2D = texture;
             }
+            
+            // Check if texture dimensions match current frame dimensions
+            if (texture.Width != FrameWidth || texture.Height != FrameHeight)
+            {
+                Logger.VideoLog.Log(this, $"Texture dimension mismatch detected: texture={texture.Width}x{texture.Height}, frame={FrameWidth}x{FrameHeight} - recreating texture");
+                
+                // Dispose old texture
+                texture.Dispose();
+                textures.Remove(graphicsDevice);
+                
+                // Create new texture with correct dimensions
+                texture = new FrameTextureSample(graphicsDevice, FrameWidth, FrameHeight, SurfaceFormat);
+                textures.Add(graphicsDevice, texture);
+                texture2D = texture;
+            }
 
             RawTexture frame;
 

@@ -28,7 +28,16 @@ namespace UI.Video
 
         protected override Node CreateDisplayNode()
         {
-            FrameNode = new FrameNodeThumb(source);
+            // Check if this is an HTTP stream frame source
+            if (source is FfmpegMediaPlatform.HttpStreamFrameSource httpStreamSource)
+            {
+                FrameNode = new HttpStreamFrameNode(httpStreamSource);
+            }
+            else
+            {
+                FrameNode = new FrameNodeThumb(source);
+            }
+            
             FrameNode.KeepAspectRatio = false;
             FrameNode.ThumbnailEnabled = ApplicationProfileSettings.Instance.VideoStaticDetector || EventManager.RaceManager.TimingSystemManager.HasVideoTiming;
             return FrameNode;

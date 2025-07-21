@@ -19,7 +19,7 @@ namespace FfmpegMediaPlatform
         protected override ProcessStartInfo GetProcessStartInfo()
         {
             // Use rgba format for direct Texture2D upload - no conversion needed
-            string ffmpegArgs = $"-f avfoundation -framerate {VideoConfig.VideoMode.FrameRate} -video_size {VideoConfig.VideoMode.Width}x{VideoConfig.VideoMode.Height} -i \"{VideoConfig.ffmpegId}\" -pix_fmt rgba -f rawvideo -";
+            string ffmpegArgs = $"-f avfoundation -probesize 32M -analyzeduration 0 -fflags nobuffer+flush_packets -max_delay 0 -framerate {VideoConfig.VideoMode.FrameRate} -video_size {VideoConfig.VideoMode.Width}x{VideoConfig.VideoMode.Height} -i \"{VideoConfig.ffmpegId}\" -pix_fmt rgba -f rawvideo -tune zerolatency -preset ultrafast -";
             Logger.VideoLog.Log(this, $"Using rgba format for direct Texture2D upload - no conversion overhead");
             
             return new ProcessStartInfo
@@ -46,7 +46,7 @@ namespace FfmpegMediaPlatform
                 
                 // Use a more reliable approach - try to list device capabilities without starting a stream
                 // This approach is more likely to work even if the camera is busy
-                string queryCommand = $"-f avfoundation -list_devices true -i dummy";
+                string queryCommand = $"-f avfoundation -list_devices true -i dummy -loglevel error";
                 
                 var output = ffmpegMediaFramework.GetFfmpegText(queryCommand);
                 

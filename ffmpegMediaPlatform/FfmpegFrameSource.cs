@@ -64,7 +64,7 @@ namespace FfmpegMediaPlatform
             this.ffmpegMediaFramework = ffmpegMediaFramework;
             // Use Color format (RGBA) which is universally supported across all platforms
             SurfaceFormat = SurfaceFormat.Color;
-            rawTextures = new XBuffer<RawTexture>(5, 640, 480); // Initialize with default size
+            rawTextures = new XBuffer<RawTexture>(8, 640, 480); // Increased buffer size for better performance
         }
 
         public override void Dispose()
@@ -156,11 +156,13 @@ namespace FfmpegMediaPlatform
             var timeSinceLastStart = DateTime.Now - lastProcessStart;
             if (timeSinceLastStart < minProcessRunTime && processRestartCount > 0)
             {
-                Logger.VideoLog.Log(this, $"Process restarting too quickly (last start {timeSinceLastStart.TotalSeconds:F1}s ago), delaying restart");
-                Task.Delay(3000).ContinueWith(_ => {
+                // Implement exponential backoff: 2^n seconds, capped at 60 seconds
+                int exponentialDelay = Math.Min((int)Math.Pow(2, processRestartCount) * 1000, 60000);
+                Logger.VideoLog.Log(this, $"Process restarting too quickly (last start {timeSinceLastStart.TotalSeconds:F1}s ago), using exponential backoff delay: {exponentialDelay/1000}s (attempt {processRestartCount})");
+                Task.Delay(exponentialDelay).ContinueWith(_ => {
                     if (run) // Only restart if we're still supposed to be running
                     {
-                        Logger.VideoLog.Log(this, "Attempting delayed process restart");
+                        Logger.VideoLog.Log(this, $"Attempting delayed process restart after {exponentialDelay/1000}s backoff");
                         StartProcess();
                     }
                 });
@@ -210,7 +212,7 @@ namespace FfmpegMediaPlatform
                             {
                                 rawTextures.Dispose();
                             }
-                            rawTextures = new XBuffer<RawTexture>(5, width, height);
+                            rawTextures = new XBuffer<RawTexture>(8, width, height);
                             
                             inited = true;
                             Logger.VideoLog.Log(this, $"Video stream initialized: {width}x{height} (RGBA input -> RGBA output, no conversion needed)");
@@ -520,7 +522,7 @@ namespace FfmpegMediaPlatform
                                     {
                                         rawTextures.Dispose();
                                     }
-                                    rawTextures = new XBuffer<RawTexture>(5, width, height);
+                                    rawTextures = new XBuffer<RawTexture>(8, width, height);
                                     
                                     // Process this frame with the correct dimensions
                                     ProcessImage();

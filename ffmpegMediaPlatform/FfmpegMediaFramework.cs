@@ -148,7 +148,7 @@ namespace FfmpegMediaPlatform
         {
             if (dshow)
             {
-                IEnumerable<string> deviceList = GetFfmpegText("-list_devices true -f dshow -i dummy", l => l.Contains("[dshow @") && l.Contains("(video)"));
+                IEnumerable<string> deviceList = GetFfmpegText("-list_devices true -f dshow -i dummy -loglevel error", l => l.Contains("[dshow @") && l.Contains("(video)"));
 
                 foreach (string deviceLine in deviceList)
                 {
@@ -168,7 +168,7 @@ namespace FfmpegMediaPlatform
 
                 //"[AVFoundation indev @ 0x7fec24704c00] AVFoundation video devices:"
                 //"	[12]	"[AVFoundation indev @ 0x7fb47c004a00] [0] Razer Kiyo Pro"	
-                IEnumerable<string> deviceList = GetFfmpegText("-list_devices true -f avfoundation -i dummy", l => l.Contains("AVFoundation"));
+                IEnumerable<string> deviceList = GetFfmpegText("-list_devices true -f avfoundation -i dummy -loglevel error", l => l.Contains("AVFoundation"));
                 Console.WriteLine($"DEBUG: AVFoundation device list: {string.Join(Environment.NewLine, deviceList)}");
 
                 bool inVideo = false;

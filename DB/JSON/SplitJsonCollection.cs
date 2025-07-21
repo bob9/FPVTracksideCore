@@ -6,6 +6,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Collections.Concurrent;
+using System.IO;
+using Tools;
 using static OfficeOpenXml.ExcelErrorValue;
 
 namespace DB.JSON
@@ -166,19 +169,31 @@ namespace DB.JSON
 
         protected virtual IEnumerable<T> DiskAll()
         {
-            foreach (DirectoryInfo di in Directory.EnumerateDirectories())
+            var directories = Directory.EnumerateDirectories()
+                .Where(di => Guid.TryParse(di.Name, out Guid id) && id != Guid.Empty)
+                .ToArray();
+                
+            var results = new ConcurrentBag<T>();
+            
+            Parallel.ForEach(directories, di =>
             {
-                if (Guid.TryParse(di.Name, out Guid id) && id != Guid.Empty)
+                try
                 {
-                    string filename = GetFilename(id);
+                    string filename = GetFilename(Guid.Parse(di.Name));
                     T[] ts = jsonIO.Read(filename);
                     foreach (T t in ts)
                     {
                         if (t != null)
-                            yield return t;
+                            results.Add(t);
                     }
                 }
-            }
+                catch (Exception ex)
+                {
+                    Logger.UI.LogException(this, ex);
+                }
+            });
+            
+            return results;
         }
 
         protected T[] Read(string filename)

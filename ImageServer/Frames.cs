@@ -112,8 +112,12 @@ namespace ImageServer
             {
                 if (processCount > texture.FrameProcessCount)
                 {
-                    System.Diagnostics.Debug.Assert(texture.Width == width);
-                    System.Diagnostics.Debug.Assert(texture.Height == height);
+                    // Check for dimension mismatch - if dimensions don't match, texture needs to be recreated
+                    if (texture.Width != width || texture.Height != height)
+                    {
+                        Tools.Logger.VideoLog.Log(this, $"Texture dimension mismatch detected: texture={texture.Width}x{texture.Height}, frame={width}x{height} - recreating texture");
+                        return false; // Signal that texture needs to be recreated
+                    }
 
                     lock (source)
                     {

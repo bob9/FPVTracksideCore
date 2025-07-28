@@ -172,33 +172,23 @@ namespace FfmpegMediaPlatform
 
         public FrameSource CreateFrameSource(VideoConfig vc)
         {
-            if (dshow)
-                return new FfmpegDshowFrameSource(this, vc);
-            else
+            // Use platform-specific detection instead of dshow/avfoundation flags
+            if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX))
+            {
                 return new FfmpegAvFoundationFrameSource(this, vc);
+            }
+            else
+            {
+                return new FfmpegDshowFrameSource(this, vc);
+            }
         }
 
         public IEnumerable<VideoConfig> GetVideoConfigs()
         {
-            if (dshow)
+            // Use platform-specific detection instead of dshow/avfoundation flags
+            if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX))
             {
-                IEnumerable<string> deviceList = GetFfmpegText("-list_devices true -f dshow -i dummy", l => l.Contains("[dshow @") && l.Contains("(video)"));
-
-                foreach (string deviceLine in deviceList)
-                {
-                    string[] splits = deviceLine.Split("\"");
-                    if (splits.Length != 3)
-                    {
-                        continue;
-                    }
-                    string name = splits[1];
-                    // Keep original Windows device names (don't remove VID/PID)
-                    yield return new VideoConfig { FrameWork = FrameWork.ffmpeg, DeviceName = name, ffmpegId = name };
-                }
-            }
-
-            if (avfoundation)
-            {
+                // macOS: Use AVFoundation
                 IEnumerable<string> deviceList = GetFfmpegText("-list_devices true -f avfoundation -i dummy", l => l.Contains("AVFoundation"));
 
                 bool inVideo = false;
@@ -240,7 +230,23 @@ namespace FfmpegMediaPlatform
                     }
                 }
             }
+            else
+            {
+                // Windows: Use DirectShow
+                IEnumerable<string> deviceList = GetFfmpegText("-list_devices true -f dshow -i dummy", l => l.Contains("[dshow @") && l.Contains("(video)"));
 
+                foreach (string deviceLine in deviceList)
+                {
+                    string[] splits = deviceLine.Split("\"");
+                    if (splits.Length != 3)
+                    {
+                        continue;
+                    }
+                    string name = splits[1];
+                    // Keep original Windows device names (don't remove VID/PID)
+                    yield return new VideoConfig { FrameWork = FrameWork.ffmpeg, DeviceName = name, ffmpegId = name };
+                }
+            }
         }
 
         public string GetValue(string source, string name)

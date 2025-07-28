@@ -29,6 +29,7 @@
     <ProjectReference Include="..\Timing\Timing.csproj" />
     <ProjectReference Include="..\Tools\Tools.csproj" />
     <ProjectReference Include="..\Webb\Webb.csproj" />
+    <ProjectReference Include="..\ffmpegMediaPlatform\FfmpegMediaPlatform.csproj" />
   </ItemGroup>
 
 

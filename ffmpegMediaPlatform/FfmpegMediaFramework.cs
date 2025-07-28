@@ -192,9 +192,8 @@ namespace FfmpegMediaPlatform
                         continue;
                     }
                     string name = splits[1];
-                    // Remove trailing VID/PID if present (for both Windows and Mac cameras)
-                    string cleanedName = System.Text.RegularExpressions.Regex.Replace(name, @"\s*VID:[0-9A-Fa-f]+\s*PID:[0-9A-Fa-f]+", "").Trim();
-                    yield return new VideoConfig { FrameWork = FrameWork.ffmpeg, DeviceName = cleanedName, ffmpegId = cleanedName };
+                    // Keep original Windows device names (don't remove VID/PID)
+                    yield return new VideoConfig { FrameWork = FrameWork.ffmpeg, DeviceName = name, ffmpegId = name };
                 }
             }
 

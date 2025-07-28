@@ -56,7 +56,16 @@ namespace FfmpegMediaPlatform
             : base(videoConfig)
         {
             this.ffmpegMediaFramework = ffmpegMediaFramework;
-            SurfaceFormat = SurfaceFormat.Color; // More widely supported than Bgr32
+            
+            // Use Bgr32 for Windows compatibility, Color for macOS
+            if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX))
+            {
+                SurfaceFormat = SurfaceFormat.Color; // More widely supported on macOS
+            }
+            else
+            {
+                SurfaceFormat = SurfaceFormat.Bgr32; // Original Windows format
+            }
             
             // Initialize with default values from VideoConfig or hardcoded fallback
             width = VideoConfig.VideoMode?.Width ?? 640;

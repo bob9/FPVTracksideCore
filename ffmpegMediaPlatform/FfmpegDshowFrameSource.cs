@@ -40,7 +40,8 @@ namespace FfmpegMediaPlatform
         protected override ProcessStartInfo GetProcessStartInfo()
         {
             string name = VideoConfig.ffmpegId;
-            return ffmpegMediaFramework.GetProcessStartInfo("-f dshow -i video=\"" + name + "\" -pix_fmt rgb32 -f rawvideo -");
+            // Use original Windows FFmpeg arguments for DirectShow
+            return ffmpegMediaFramework.GetProcessStartInfo("-f dshow -i video=\"" + name + "\" -pix_fmt bgr32 -f rawvideo -");
         }
     }
 }

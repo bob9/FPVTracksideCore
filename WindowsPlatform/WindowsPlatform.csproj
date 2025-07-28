@@ -26,6 +26,7 @@
 	  <ProjectReference Include="..\Tools\Tools.csproj" />
 	  <ProjectReference Include="..\UI\UI.csproj" />
 	  <ProjectReference Include="..\WinFormsGraphicsDevice\WinFormsGraphicsDevice.csproj" />
+	  <ProjectReference Include="..\ffmpegMediaPlatform\ffmpegMediaPlatform.csproj" />
 	</ItemGroup>
 
 

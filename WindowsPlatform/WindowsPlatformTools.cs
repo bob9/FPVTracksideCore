@@ -14,6 +14,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Tools;
+using FfmpegMediaPlatform;
 
 namespace WindowsPlatform
 {
@@ -66,6 +67,12 @@ namespace WindowsPlatform
         {
             workingDirectory = new DirectoryInfo(Directory.GetCurrentDirectory());
             clipboard = new Clipboard();
+            
+            // Register FFmpeg framework for Windows video capture
+            VideoFrameWorks.Available = new VideoFrameWork[]
+            {
+                new FfmpegMediaPlatform.FfmpegMediaFramework()
+            };
         }
 
         public override ITextRenderer CreateTextRenderer()

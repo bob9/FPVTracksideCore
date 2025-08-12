@@ -548,6 +548,13 @@ namespace FfmpegMediaPlatform
                             Tools.Logger.VideoLog.LogCall(this, "ReadLoop: Looping back to start");
                             ffmpeg.av_seek_frame(fmt, videoStreamIndex, st->start_time, ffmpeg.AVSEEK_FLAG_BACKWARD);
                             ffmpeg.avcodec_flush_buffers(codecCtx);
+                            
+                            // Reset timing variables when looping to prevent timing drift
+                            playbackStartTime = DateTime.MinValue;
+                            playbackStartMediaTime = TimeSpan.Zero;
+                            mediaTime = TimeSpan.Zero;
+                            Tools.Logger.VideoLog.LogCall(this, "ReadLoop: Reset timing variables for loop restart");
+                            
                             isAtEnd = false;
                             continue;
                         }

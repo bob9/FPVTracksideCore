@@ -149,12 +149,18 @@ namespace UI.Video
                         }
                     }
                     maxEnd = minStart + maxEndDuration;
+                    
+                    // Only set timeline when we have valid playback sources and timeline data
+                    var frameTimes = GetFrameTimesFromFrameSources();
+                    Tools.Logger.VideoLog.LogCall(this, $"ReplayNode.OnChange: Setting timeline for {frameSources.Count()} playback sources - Start: {minStart:HH:mm:ss.fff}, End: {maxEnd:HH:mm:ss.fff}, Duration: {(maxEnd - minStart).TotalSeconds:F2}s");
+                    SeekNode.SetRace(race, minStart, maxEnd, frameTimes);
+                    ChannelsGridNode.SetPlaybackTime(race.Start);
                 }
-                
-                // Get frame times for timeline positioning
-                var frameTimes = GetFrameTimesFromFrameSources();
-                SeekNode.SetRace(race, minStart, maxEnd, frameTimes);
-                ChannelsGridNode.SetPlaybackTime(race.Start);
+                else
+                {
+                    // No playback frame sources available - don't set invalid timeline
+                    Tools.Logger.VideoLog.LogCall(this, "ReplayNode.OnChange: No playback frame sources found - skipping timeline setup");
+                }
             }
         }
 
@@ -401,9 +407,17 @@ namespace UI.Video
                     }
 
 
-                    // Get frame times for timeline positioning
-                    var frameTimes = GetFrameTimesFromFrameSources();
-                    SeekNode.SetRace(race, minStart, maxEnd, frameTimes);
+                    // Only set timeline if we have valid playback sources
+                    if (frameSources.Any() && maxEnd > minStart)
+                    {
+                        var frameTimes = GetFrameTimesFromFrameSources();
+                        Tools.Logger.VideoLog.LogCall(this, $"ReplayNode.LoadRecordings: Setting timeline for {frameSources.Count()} playback sources - Start: {minStart:HH:mm:ss.fff}, End: {maxEnd:HH:mm:ss.fff}, Duration: {(maxEnd - minStart).TotalSeconds:F2}s");
+                        SeekNode.SetRace(race, minStart, maxEnd, frameTimes);
+                    }
+                    else
+                    {
+                        Tools.Logger.VideoLog.LogCall(this, "ReplayNode.LoadRecordings: No valid playback sources or invalid timeline - skipping timeline setup");
+                    }
 
                     RequestLayout();
                 });

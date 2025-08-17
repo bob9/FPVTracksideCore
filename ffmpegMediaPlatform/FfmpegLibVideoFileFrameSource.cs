@@ -41,7 +41,7 @@ namespace FfmpegMediaPlatform
                 }
                 
                 // Set log level to reduce noise (only if not already set)
-                ffmpeg.av_log_set_level(ffmpeg.AV_LOG_ERROR);
+                ffmpeg.av_log_set_level(ffmpeg.AV_LOG_WARNING);
             }
             catch (Exception ex)
             {
@@ -171,32 +171,54 @@ namespace FfmpegMediaPlatform
 
         private void InitializeMetadataEarly()
         {
+            Tools.Logger.VideoLog.LogCall(this, $"InitializeMetadataEarly: Starting metadata probe for: {VideoConfig.FilePath}");
+            
             // 1) Load XML frame timing if available (sets startTime and preferred duration)
             LoadFrameTimesFromRecordInfo();
+            Tools.Logger.VideoLog.LogCall(this, $"InitializeMetadataEarly: After XML load - Length: {length.TotalSeconds:F2}s, StartTime: {startTime:HH:mm:ss.fff}");
 
             // 2) Probe container duration via libav if length still unknown or as fallback for min(xml, container)
             var containerDuration = ProbeFileDuration(VideoConfig.FilePath);
+            Tools.Logger.VideoLog.LogCall(this, $"InitializeMetadataEarly: Container duration probe result: {containerDuration.TotalSeconds:F2}s");
+            
             if (containerDuration > TimeSpan.Zero)
             {
                 if (length == TimeSpan.Zero)
                 {
                     length = containerDuration;
+                    Tools.Logger.VideoLog.LogCall(this, $"InitializeMetadataEarly: Set length from container: {length.TotalSeconds:F2}s");
                 }
                 else
                 {
                     // Prefer the shorter to avoid UI overrun
+                    var originalLength = length;
                     length = TimeSpan.FromSeconds(Math.Min(length.TotalSeconds, containerDuration.TotalSeconds));
+                    Tools.Logger.VideoLog.LogCall(this, $"InitializeMetadataEarly: Used min(XML={originalLength.TotalSeconds:F2}s, Container={containerDuration.TotalSeconds:F2}s) = {length.TotalSeconds:F2}s");
                 }
             }
+            else
+            {
+                Tools.Logger.VideoLog.LogCall(this, $"InitializeMetadataEarly: Container duration probe failed, keeping current length: {length.TotalSeconds:F2}s");
+            }
+            
+            Tools.Logger.VideoLog.LogCall(this, $"InitializeMetadataEarly: Final result - Length: {length.TotalSeconds:F2}s, FrameRate: {frameRate:F2}fps");
         }
 
         private TimeSpan ProbeFileDuration(string path)
         {
             try
             {
-                if (string.IsNullOrWhiteSpace(path)) return TimeSpan.Zero;
+                if (string.IsNullOrWhiteSpace(path)) 
+                {
+                    Tools.Logger.VideoLog.LogCall(this, "ProbeFileDuration: Path is null or empty");
+                    return TimeSpan.Zero;
+                }
                 if (!Path.IsPathRooted(path)) path = Path.GetFullPath(path);
-                if (!File.Exists(path)) return TimeSpan.Zero;
+                if (!File.Exists(path)) 
+                {
+                    Tools.Logger.VideoLog.LogCall(this, $"ProbeFileDuration: File does not exist: {path}");
+                    return TimeSpan.Zero;
+                }
 
                 // Ensure libraries are loaded before attempting to use them
                 FfmpegNativeLoader.EnsureRegistered();
@@ -208,16 +230,64 @@ namespace FfmpegMediaPlatform
                     return TimeSpan.Zero;
                 }
 
+                Tools.Logger.VideoLog.LogCall(this, $"ProbeFileDuration: Probing file: {path}");
+
                 AVFormatContext* localFmt = null;
                 AVFormatContext** pfmt = &localFmt;
-                if (ffmpeg.avformat_open_input(pfmt, path, null, null) < 0) return TimeSpan.Zero;
+                int openResult = ffmpeg.avformat_open_input(pfmt, path, null, null);
+                if (openResult < 0) 
+                {
+                    Tools.Logger.VideoLog.LogCall(this, $"ProbeFileDuration: Failed to open input file (error: {GetFFmpegError(openResult)})");
+                    return TimeSpan.Zero;
+                }
+                
                 try
                 {
-                    if (ffmpeg.avformat_find_stream_info(localFmt, null) < 0) return TimeSpan.Zero;
+                    int streamInfoResult = ffmpeg.avformat_find_stream_info(localFmt, null);
+                    if (streamInfoResult < 0) 
+                    {
+                        Tools.Logger.VideoLog.LogCall(this, $"ProbeFileDuration: Failed to find stream info (error: {GetFFmpegError(streamInfoResult)})");
+                        return TimeSpan.Zero;
+                    }
+                    
+                    // Try container duration first
                     if (localFmt->duration > 0)
                     {
-                        return TimeSpan.FromSeconds(localFmt->duration / (double)ffmpeg.AV_TIME_BASE);
+                        double durationSeconds = localFmt->duration / (double)ffmpeg.AV_TIME_BASE;
+                        Tools.Logger.VideoLog.LogCall(this, $"ProbeFileDuration: Container duration found: {durationSeconds:F2} seconds");
+                        return TimeSpan.FromSeconds(durationSeconds);
                     }
+                    
+                    // Fallback: Try to calculate duration from video stream info
+                    for (int i = 0; i < localFmt->nb_streams; i++)
+                    {
+                        var stream = localFmt->streams[i];
+                        if (stream->codecpar->codec_type == AVMediaType.AVMEDIA_TYPE_VIDEO)
+                        {
+                            // Try stream duration
+                            if (stream->duration > 0 && stream->time_base.den > 0)
+                            {
+                                double streamDuration = stream->duration * ((double)stream->time_base.num / stream->time_base.den);
+                                Tools.Logger.VideoLog.LogCall(this, $"ProbeFileDuration: Video stream duration found: {streamDuration:F2} seconds");
+                                return TimeSpan.FromSeconds(streamDuration);
+                            }
+                            
+                            // Try to estimate from frame count and frame rate
+                            if (stream->nb_frames > 0 && stream->avg_frame_rate.den > 0)
+                            {
+                                double frameRate = (double)stream->avg_frame_rate.num / stream->avg_frame_rate.den;
+                                if (frameRate > 0)
+                                {
+                                    double estimatedDuration = stream->nb_frames / frameRate;
+                                    Tools.Logger.VideoLog.LogCall(this, $"ProbeFileDuration: Estimated duration from frames: {estimatedDuration:F2} seconds ({stream->nb_frames} frames @ {frameRate:F2} fps)");
+                                    return TimeSpan.FromSeconds(estimatedDuration);
+                                }
+                            }
+                            break; // Found video stream, no need to check others
+                        }
+                    }
+                    
+                    Tools.Logger.VideoLog.LogCall(this, "ProbeFileDuration: No valid duration found in container or streams");
                 }
                 finally
                 {
@@ -229,6 +299,19 @@ namespace FfmpegMediaPlatform
                 Tools.Logger.VideoLog.LogCall(this, $"ProbeFileDuration error: {ex.Message}");
             }
             return TimeSpan.Zero;
+        }
+
+        private string GetFFmpegError(int error)
+        {
+            byte[] buffer = new byte[1024];
+            unsafe
+            {
+                fixed (byte* ptr = buffer)
+                {
+                    ffmpeg.av_strerror(error, ptr, (ulong)buffer.Length);
+                }
+            }
+            return System.Text.Encoding.UTF8.GetString(buffer).TrimEnd('\0');
         }
 
         private void LoadFrameTimesFromRecordInfo()
@@ -312,7 +395,7 @@ namespace FfmpegMediaPlatform
             // Try to set log level, but don't fail if it doesn't work
             try
             {
-                ffmpeg.av_log_set_level(ffmpeg.AV_LOG_QUIET);
+                ffmpeg.av_log_set_level(ffmpeg.AV_LOG_WARNING);
             }
             catch (Exception logEx)
             {

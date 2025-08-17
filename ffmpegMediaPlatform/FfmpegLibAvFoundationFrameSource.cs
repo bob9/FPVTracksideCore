@@ -44,8 +44,17 @@ namespace FfmpegMediaPlatform
         private DateTime recordingStartTime;
         private long frameCount;
         
-        // RGBA recording using separate ffmpeg process
-        private RgbaRecorderManager rgbaRecorderManager;
+        // Native hardware-accelerated recording using libavformat/libavcodec
+        private AVFormatContext* outputFmt;
+        private AVCodecContext* encoderCtx;
+        private AVStream* videoStream;
+        private AVFrame* encoderFrame;
+        private AVPacket* encoderPkt;
+        private SwsContext* encoderSws;
+        private bool nativeRecordingEnabled;
+        private long recordingPts;
+        private bool headerWritten;
+        private bool encoderReady;
         
         private FfmpegMediaFramework ffmpegMediaFramework;
 
@@ -59,10 +68,6 @@ namespace FfmpegMediaPlatform
         {
             get
             {
-                if (rgbaRecorderManager != null && rgbaRecorderManager.FrameTimes.Length > 0)
-                {
-                    return rgbaRecorderManager.FrameTimes;
-                }
                 return frameTimes?.ToArray() ?? new FrameTime[0];
             }
         }
@@ -88,13 +93,20 @@ namespace FfmpegMediaPlatform
             frameTimes = new List<FrameTime>();
             recordingFilename = null;
             recordNextFrameTime = false;
-            
-            // Initialize RGBA recorder manager
-            rgbaRecorderManager = new RgbaRecorderManager(ffmpegMediaFramework);
             manualRecording = false;
             finalising = false;
             recordingStartTime = DateTime.MinValue;
             frameCount = 0;
+            
+            // Initialize native recording fields
+            outputFmt = null;
+            encoderCtx = null;
+            videoStream = null;
+            encoderFrame = null;
+            encoderPkt = null;
+            encoderSws = null;
+            nativeRecordingEnabled = true; // Use native recording by default
+            recordingPts = 0;
 
             // Check if native libraries are available before proceeding
             try
@@ -169,43 +181,244 @@ namespace FfmpegMediaPlatform
 
         public override IEnumerable<Mode> GetModes()
         {
-            // For native implementation, we need to probe AVFoundation devices
-            // This mimics the functionality from FfmpegAvFoundationFrameSource
-            Tools.Logger.VideoLog.LogCall(this, $"GetModes() called (NATIVE) - querying camera capabilities for '{VideoConfig.DeviceName}'");
+            Tools.Logger.VideoLog.LogCall(this, $"GetModes() called (NATIVE) - detecting camera capabilities for '{VideoConfig.DeviceName}'");
             
             List<Mode> supportedModes = new List<Mode>();
             
             try
             {
-                // Use the existing binary implementation to get modes for now
-                // In the future, this could be replaced with native AVFoundation probing
-                var tempSource = new FfmpegAvFoundationFrameSource(ffmpegMediaFramework, VideoConfig);
-                var binaryModes = tempSource.GetModes();
+                // Use native FFmpeg libraries to detect camera capabilities
+                FfmpegNativeLoader.EnsureRegistered();
                 
-                foreach (var mode in binaryModes)
+                // Get input format based on platform
+                AVInputFormat* inputFormat = GetPlatformInputFormat();
+                if (inputFormat == null)
                 {
-                    supportedModes.Add(new Mode
-                    {
-                        Width = mode.Width,
-                        Height = mode.Height,
-                        FrameRate = mode.FrameRate,
-                        FrameWork = FrameWork.ffmpeg,
-                        Index = mode.Index,
-                        Format = mode.Format
-                    });
+                    Tools.Logger.VideoLog.LogCall(this, "Platform input format not available, using defaults");
+                    return GetDefaultModes();
                 }
                 
-                Tools.Logger.VideoLog.LogCall(this, $"Camera capability detection complete (NATIVE): {supportedModes.Count} supported modes found");
+                // Get device URL for this platform
+                string deviceUrl = GetDeviceUrl();
+                
+                // Test common resolutions that cameras typically support
+                var testResolutions = GetTestResolutions();
+                
+                Tools.Logger.VideoLog.LogCall(this, $"Testing {testResolutions.Length} resolution modes for device: {deviceUrl}");
+                
+                foreach (var testRes in testResolutions)
+                {
+                    if (TryTestResolution(inputFormat, deviceUrl, testRes.Width, testRes.Height, testRes.FrameRate))
+                    {
+                        supportedModes.Add(new Mode
+                        {
+                            Width = testRes.Width,
+                            Height = testRes.Height,
+                            FrameRate = testRes.FrameRate,
+                            FrameWork = FrameWork.ffmpeg,
+                            Index = 0,
+                            Format = GetPlatformPixelFormat()
+                        });
+                        
+                        Tools.Logger.VideoLog.LogCall(this, $"✓ Detected supported mode: {testRes.Width}x{testRes.Height}@{testRes.FrameRate}fps");
+                    }
+                    else
+                    {
+                        Tools.Logger.VideoLog.LogCall(this, $"✗ Mode not supported: {testRes.Width}x{testRes.Height}@{testRes.FrameRate}fps");
+                    }
+                }
+                
+                Tools.Logger.VideoLog.LogCall(this, $"Native camera capability detection complete: {supportedModes.Count} supported modes found");
+                
+                // If no modes detected, return defaults
+                if (supportedModes.Count == 0)
+                {
+                    Tools.Logger.VideoLog.LogCall(this, "No modes detected, returning defaults");
+                    return GetDefaultModes();
+                }
             }
             catch (Exception ex)
             {
                 Tools.Logger.VideoLog.LogException(this, ex);
-                // Return default modes if detection fails
-                supportedModes.Add(new Mode { Width = 1920, Height = 1080, FrameRate = 30, FrameWork = FrameWork.ffmpeg, Format = "uyvy422" });
-                supportedModes.Add(new Mode { Width = 1280, Height = 720, FrameRate = 60, FrameWork = FrameWork.ffmpeg, Format = "uyvy422" });
+                Tools.Logger.VideoLog.LogCall(this, "Native mode detection failed, returning defaults");
+                return GetDefaultModes();
             }
             
             return supportedModes;
+        }
+        
+        private unsafe AVInputFormat* GetPlatformInputFormat()
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                return ffmpeg.av_find_input_format("avfoundation");
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                return ffmpeg.av_find_input_format("dshow");
+            }
+            else
+            {
+                // Linux could use v4l2
+                return ffmpeg.av_find_input_format("v4l2");
+            }
+        }
+        
+        private string GetDeviceUrl()
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                // Use device index for AVFoundation
+                return "0";
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                // Use device name for DirectShow
+                return $"video=\"{VideoConfig.ffmpegId}\"";
+            }
+            else
+            {
+                // Linux v4l2
+                return "/dev/video0";
+            }
+        }
+        
+        private string GetPlatformPixelFormat()
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                return "uyvy422";
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                return "rgb24";
+            }
+            else
+            {
+                return "yuyv422";
+            }
+        }
+        
+        private (int Width, int Height, int FrameRate)[] GetTestResolutions()
+        {
+            // Test resolutions in order of likelihood, starting with most common
+            return new[]
+            {
+                (640, 480, 30),     // VGA - almost all cameras support this
+                (1280, 720, 30),    // 720p
+                (1920, 1080, 30),   // 1080p
+                (1280, 720, 60),    // 720p 60fps
+                (800, 600, 30),     // SVGA
+                (1024, 768, 30),    // XGA
+                (1552, 1552, 30),   // Square format (current mode)
+                (1920, 1080, 60),   // 1080p 60fps
+                (3840, 2160, 30),   // 4K (if supported)
+            };
+        }
+        
+        private IEnumerable<Mode> GetDefaultModes()
+        {
+            return new[]
+            {
+                new Mode { Width = 640, Height = 480, FrameRate = 30, FrameWork = FrameWork.ffmpeg, Format = "uyvy422" },
+                new Mode { Width = 1280, Height = 720, FrameRate = 30, FrameWork = FrameWork.ffmpeg, Format = "uyvy422" },
+                new Mode { Width = 1920, Height = 1080, FrameRate = 30, FrameWork = FrameWork.ffmpeg, Format = "uyvy422" }
+            };
+        }
+        
+        private unsafe bool TryTestResolution(AVInputFormat* inputFormat, string deviceUrl, int width, int height, int frameRate)
+        {
+            AVFormatContext* testFmt = null;
+            AVDictionary* testOptions = null;
+            
+            try
+            {
+                // Set up test options for cross-platform compatibility
+                string videoSize = $"{width}x{height}";
+                ffmpeg.av_dict_set(&testOptions, "video_size", videoSize, 0);
+                ffmpeg.av_dict_set(&testOptions, "framerate", frameRate.ToString(), 0);
+                
+                // Set platform-appropriate pixel format
+                string pixelFormat = GetPlatformPixelFormat();
+                ffmpeg.av_dict_set(&testOptions, "pixel_format", pixelFormat, 0);
+                
+                // Ultra-fast test - minimal timeouts to avoid hanging
+                ffmpeg.av_dict_set(&testOptions, "probesize", "50000", 0);       // 50KB probe
+                ffmpeg.av_dict_set(&testOptions, "analyzeduration", "200000", 0); // 0.2 seconds
+                ffmpeg.av_dict_set(&testOptions, "fflags", "nobuffer", 0);
+                
+                // Platform-specific optimizations
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    ffmpeg.av_dict_set(&testOptions, "rtbufsize", "100M", 0);
+                    ffmpeg.av_dict_set(&testOptions, "video_device_number", "0", 0);
+                }
+                
+                // Try to open with this resolution
+                int result = ffmpeg.avformat_open_input(&testFmt, deviceUrl, inputFormat, &testOptions);
+                if (result >= 0)
+                {
+                    // Quick stream info check with timeout
+                    if (ffmpeg.avformat_find_stream_info(testFmt, null) >= 0)
+                    {
+                        // Check if we found a video stream with approximately the requested dimensions
+                        for (int i = 0; i < (int)testFmt->nb_streams; i++)
+                        {
+                            var stream = testFmt->streams[i];
+                            if (stream->codecpar->codec_type == AVMediaType.AVMEDIA_TYPE_VIDEO)
+                            {
+                                int actualWidth = stream->codecpar->width;
+                                int actualHeight = stream->codecpar->height;
+                                
+                                // Allow reasonable tolerance in dimensions (cameras might negotiate close resolutions)
+                                int widthTolerance = Math.Max(50, width / 20);  // 5% or 50px, whichever is larger
+                                int heightTolerance = Math.Max(50, height / 20);
+                                
+                                if (Math.Abs(actualWidth - width) <= widthTolerance && 
+                                    Math.Abs(actualHeight - height) <= heightTolerance)
+                                {
+                                    Tools.Logger.VideoLog.LogCall(this, 
+                                        $"Resolution test success: requested {width}x{height}, got {actualWidth}x{actualHeight}");
+                                    return true;
+                                }
+                                else
+                                {
+                                    Tools.Logger.VideoLog.LogCall(this, 
+                                        $"Resolution mismatch: requested {width}x{height}, got {actualWidth}x{actualHeight}");
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        Tools.Logger.VideoLog.LogCall(this, "Stream info detection failed");
+                    }
+                }
+                else
+                {
+                    // Log the specific error for debugging
+                    var error = GetFFmpegError(result);
+                    Tools.Logger.VideoLog.LogCall(this, $"Failed to open device for {width}x{height}@{frameRate}: {error}");
+                }
+                
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Tools.Logger.VideoLog.LogCall(this, $"Exception testing {width}x{height}@{frameRate}: {ex.Message}");
+                return false;
+            }
+            finally
+            {
+                if (testFmt != null)
+                {
+                    ffmpeg.avformat_close_input(&testFmt);
+                }
+                if (testOptions != null)
+                {
+                    ffmpeg.av_dict_free(&testOptions);
+                }
+            }
         }
 
         public override bool Start()
@@ -725,14 +938,17 @@ namespace FfmpegMediaPlatform
                         // Direct copy without flipping - native AVFoundation provides correct orientation
                         Buffer.MemoryCopy(srcPtr, dstPtr, rgbaBuffer.Length, codecCtx->height * stride);
                         
-                        // Handle recording
-                        bool isRecording = Recording && rgbaRecorderManager.IsRecording;
-                        if (isRecording)
+                        // Handle native recording
+                        if (Recording && nativeRecordingEnabled)
                         {
-                            // Queue frame for async recording
-                            byte[] frameData = new byte[rgbaBuffer.Length];
-                            Buffer.BlockCopy(rgbaBuffer, 0, frameData, 0, rgbaBuffer.Length);
-                            // Queue the frame for recording (WriteFrame will be called by the recording worker)
+                            WriteFrameToRecording(dstPtr);
+                        }
+                        else if (Recording && !nativeRecordingEnabled)
+                        {
+                            if (recordingPts % 60 == 0) // Log occasionally
+                            {
+                                Tools.Logger.VideoLog.LogCall(this, "ProcessCurrentFrame: Recording=true but nativeRecordingEnabled=false - skipping frame");
+                            }
                         }
                         
                         // Handle frame timing for recording
@@ -780,6 +996,8 @@ namespace FfmpegMediaPlatform
 
         public void StartRecording(string filename)
         {
+            Tools.Logger.VideoLog.LogCall(this, $"StartRecording: ENTRY - filename={filename}, Recording={Recording}, nativeRecordingEnabled={nativeRecordingEnabled}");
+            
             if (Recording)
             {
                 Tools.Logger.VideoLog.LogCall(this, $"Already recording to {recordingFilename}");
@@ -790,21 +1008,38 @@ namespace FfmpegMediaPlatform
             recordingStartTime = DateTime.MinValue;
             frameCount = 0;
             frameTimes.Clear();
-            Recording = true;
             finalising = false;
+            recordingPts = 0;
+            headerWritten = false;
+            encoderReady = false;
+            Recording = false; // Initialize to false, will be set to true only after successful encoder init
 
-            // Start RGBA recording with separate ffmpeg process
-            float recordingFrameRate = (float)(frameRate > 0 ? frameRate : 30.0);
-            
-            bool started = rgbaRecorderManager.StartRecording(filename, FrameWidth, FrameHeight, recordingFrameRate, this);
-            if (!started)
+            if (nativeRecordingEnabled)
             {
-                Tools.Logger.VideoLog.LogCall(this, $"Failed to start RGBA recording to {filename}");
-                Recording = false;
-                return;
+                Tools.Logger.VideoLog.LogCall(this, $"StartRecording: Attempting to initialize native recording to {filename}");
+                // Use native hardware-accelerated recording
+                bool initResult = InitializeNativeRecording(filename);
+                Tools.Logger.VideoLog.LogCall(this, $"StartRecording: InitializeNativeRecording returned {initResult}");
+                
+                if (initResult)
+                {
+                    Recording = true; // Only set to true after successful initialization
+                    Tools.Logger.VideoLog.LogCall(this, $"StartRecording: Successfully started native hardware-accelerated AVFoundation recording to {filename}");
+                    Tools.Logger.VideoLog.LogCall(this, $"StartRecording: Recording state - Recording={Recording}, nativeRecordingEnabled={nativeRecordingEnabled}");
+                    return;
+                }
+                else
+                {
+                    Tools.Logger.VideoLog.LogCall(this, "StartRecording: Failed to initialize native recording, keeping recording disabled");
+                    Recording = false;
+                    return;
+                }
             }
-
-            Tools.Logger.VideoLog.LogCall(this, $"Started native AVFoundation RGBA recording to {filename}");
+            else
+            {
+                Tools.Logger.VideoLog.LogCall(this, $"StartRecording: Native recording disabled, not starting recording");
+                Recording = false;
+            }
         }
 
         public void StopRecording()
@@ -815,18 +1050,17 @@ namespace FfmpegMediaPlatform
                 return;
             }
 
-            Tools.Logger.VideoLog.LogCall(this, $"Stopping native AVFoundation RGBA recording to {recordingFilename}");
+            Tools.Logger.VideoLog.LogCall(this, $"Stopping native hardware-accelerated AVFoundation recording to {recordingFilename}");
             Recording = false;
             finalising = true;
 
-            bool stopped = rgbaRecorderManager.StopRecording();
-            if (!stopped)
+            if (nativeRecordingEnabled)
             {
-                Tools.Logger.VideoLog.LogCall(this, $"Warning: RGBA recording may not have stopped cleanly");
+                FinalizeNativeRecording();
             }
 
             finalising = false;
-            Tools.Logger.VideoLog.LogCall(this, $"Stopped native AVFoundation RGBA recording to {recordingFilename}");
+            Tools.Logger.VideoLog.LogCall(this, $"Stopped native hardware-accelerated AVFoundation recording to {recordingFilename}");
         }
 
         public override bool Stop()
@@ -853,12 +1087,707 @@ namespace FfmpegMediaPlatform
             return base.Stop();
         }
 
+        private unsafe bool InitializeNativeRecordingSoftware(string filename)
+        {
+            // Try multiple software encoders in order of preference
+            string[] softwareEncoders = { "libx264", "h264", "libopenh264" };
+            
+            foreach (string encoder in softwareEncoders)
+            {
+                Tools.Logger.VideoLog.LogCall(this, $"InitializeNativeRecordingSoftware: Trying software encoder: {encoder}");
+                if (InitializeNativeRecordingWithCodec(filename, encoder))
+                {
+                    Tools.Logger.VideoLog.LogCall(this, $"InitializeNativeRecordingSoftware: Successfully initialized with {encoder}");
+                    return true;
+                }
+            }
+            
+            Tools.Logger.VideoLog.LogCall(this, "InitializeNativeRecordingSoftware: All software encoders failed");
+            return false;
+        }
+
+        private unsafe bool InitializeNativeRecording(string filename)
+        {
+            // Try hardware first, then fallback to software
+            Tools.Logger.VideoLog.LogCall(this, "InitializeNativeRecording: Attempting VideoToolbox hardware encoding");
+            if (InitializeNativeRecordingWithCodec(filename, "h264_videotoolbox"))
+            {
+                Tools.Logger.VideoLog.LogCall(this, "InitializeNativeRecording: VideoToolbox hardware encoding successful");
+                return true;
+            }
+            
+            Tools.Logger.VideoLog.LogCall(this, "InitializeNativeRecording: VideoToolbox failed, trying alternative approaches");
+            
+            // If VideoToolbox failed due to container incompatibility, try MP4 container
+            if (filename.EndsWith(".mkv"))
+            {
+                string mp4Filename = filename.Replace(".mkv", ".mp4");
+                Tools.Logger.VideoLog.LogCall(this, $"InitializeNativeRecording: Trying VideoToolbox with MP4 container: {mp4Filename}");
+                
+                if (InitializeNativeRecordingWithCodec(mp4Filename, "h264_videotoolbox"))
+                {
+                    Tools.Logger.VideoLog.LogCall(this, "InitializeNativeRecording: VideoToolbox successful with MP4 container");
+                    return true;
+                }
+            }
+            
+            Tools.Logger.VideoLog.LogCall(this, "InitializeNativeRecording: All VideoToolbox attempts failed, falling back to software encoding");
+            return InitializeNativeRecordingSoftware(filename);
+        }
+
+        private unsafe bool InitializeNativeRecordingWithCodec(string filename, string codecName)
+        {
+            try
+            {
+                Tools.Logger.VideoLog.LogCall(this, $"InitializeNativeRecordingWithCodec: ENTRY - filename={filename}, codec={codecName}");
+                
+                // Ensure output directory exists
+                string outputDir = Path.GetDirectoryName(filename);
+                if (!string.IsNullOrEmpty(outputDir) && !Directory.Exists(outputDir))
+                {
+                    Tools.Logger.VideoLog.LogCall(this, $"InitializeNativeRecordingWithCodec: Creating directory {outputDir}");
+                    Directory.CreateDirectory(outputDir);
+                }
+
+                // Initialize output format context
+                fixed (AVFormatContext** pfmt = &outputFmt)
+                {
+                    if (ffmpeg.avformat_alloc_output_context2(pfmt, null, null, filename) < 0)
+                    {
+                        Tools.Logger.VideoLog.LogCall(this, "Failed to allocate output format context");
+                        return false;
+                    }
+                }
+
+                // Find the specified encoder
+                AVCodec* codec = ffmpeg.avcodec_find_encoder_by_name(codecName);
+                if (codec == null)
+                {
+                    Tools.Logger.VideoLog.LogCall(this, $"Encoder {codecName} not found");
+                    
+                    // List available H.264 encoders for debugging
+                    Tools.Logger.VideoLog.LogCall(this, "Available H.264 encoders:");
+                    AVCodec* availableCodec = null;
+                    void* iter = null;
+                    while ((availableCodec = ffmpeg.av_codec_iterate(&iter)) != null)
+                    {
+                        if (availableCodec->type == AVMediaType.AVMEDIA_TYPE_VIDEO && 
+                            ffmpeg.av_codec_is_encoder(availableCodec) == 1 &&
+                            availableCodec->id == AVCodecID.AV_CODEC_ID_H264)
+                        {
+                            string name = Marshal.PtrToStringAnsi((IntPtr)availableCodec->name);
+                            Tools.Logger.VideoLog.LogCall(this, $"  - {name}");
+                        }
+                    }
+                    
+                    return false;
+                }
+
+                Tools.Logger.VideoLog.LogCall(this, $"Using video encoder: {codecName}");
+
+                // Create video stream
+                videoStream = ffmpeg.avformat_new_stream(outputFmt, codec);
+                if (videoStream == null)
+                {
+                    Tools.Logger.VideoLog.LogCall(this, "Failed to create video stream");
+                    return false;
+                }
+
+                // Allocate encoder context
+                encoderCtx = ffmpeg.avcodec_alloc_context3(codec);
+                if (encoderCtx == null)
+                {
+                    Tools.Logger.VideoLog.LogCall(this, "Failed to allocate encoder context");
+                    return false;
+                }
+
+                // Configure encoder - basic settings first
+                encoderCtx->width = FrameWidth;
+                encoderCtx->height = FrameHeight;
+                
+                // Use YUV420P for better compatibility across all encoders
+                encoderCtx->pix_fmt = AVPixelFormat.AV_PIX_FMT_YUV420P;
+                Tools.Logger.VideoLog.LogCall(this, "Using YUV420P pixel format for maximum compatibility");
+                
+                // Configure for variable frame rate (VFR) to support timestamp-based recording
+                // Use high-resolution time base for precise PTS timing
+                encoderCtx->time_base = new AVRational { num = 1, den = 90000 }; // 90kHz time base (standard for H.264)
+                encoderCtx->framerate = new AVRational { num = 0, den = 1 }; // 0 indicates variable frame rate
+                
+                Tools.Logger.VideoLog.LogCall(this, $"InitializeNativeRecording: Encoder config - {FrameWidth}x{FrameHeight} @ {frameRate:F1}fps, codec: {codecName}");
+                
+                // Hardware encoder specific settings
+                if (codecName.Contains("videotoolbox"))
+                {
+                    // VideoToolbox settings - optimized for MKV compatibility
+                    encoderCtx->bit_rate = 2000000; // 2 Mbps for better stability
+                    encoderCtx->gop_size = 30; // Keyframe interval for seeking
+                    encoderCtx->max_b_frames = 0; // Disable B-frames for MKV compatibility
+                    Tools.Logger.VideoLog.LogCall(this, $"InitializeNativeRecording: Using VideoToolbox with bitrate {encoderCtx->bit_rate}, GOP {encoderCtx->gop_size}");
+                    
+                    // Set color space and range for VideoToolbox
+                    encoderCtx->color_range = AVColorRange.AVCOL_RANGE_MPEG; // Use MPEG range
+                    encoderCtx->colorspace = AVColorSpace.AVCOL_SPC_BT709;   // BT.709 color space
+                    encoderCtx->color_primaries = AVColorPrimaries.AVCOL_PRI_BT709; // BT.709 primaries
+                    encoderCtx->color_trc = AVColorTransferCharacteristic.AVCOL_TRC_BT709; // BT.709 transfer
+                    
+                    // Set VideoToolbox options for MKV compatibility
+                    int ret1 = ffmpeg.av_opt_set(encoderCtx->priv_data, "allow_sw", "1", 0); // Allow software fallback
+                    int ret2 = ffmpeg.av_opt_set(encoderCtx->priv_data, "profile", "main", 0); // Main profile for better MKV compatibility
+                    int ret3 = ffmpeg.av_opt_set(encoderCtx->priv_data, "level", "3.1", 0); // H.264 level for compatibility
+                    Tools.Logger.VideoLog.LogCall(this, $"InitializeNativeRecording: VideoToolbox MKV-compatible options - allow_sw: {ret1}, profile: {ret2}, level: {ret3}");
+                }
+                else
+                {
+                    // Software encoder settings
+                    encoderCtx->bit_rate = 5000000;
+                    int ret1 = ffmpeg.av_opt_set(encoderCtx->priv_data, "preset", "medium", 0);
+                    int ret2 = ffmpeg.av_opt_set(encoderCtx->priv_data, "tune", "zerolatency", 0);
+                    Tools.Logger.VideoLog.LogCall(this, $"InitializeNativeRecording: Software encoder options - preset: {ret1}, tune: {ret2}");
+                }
+
+                // Set GOP size for keyframes
+                encoderCtx->gop_size = Math.Max(1, (int)(frameRate * 0.1f)); // Keyframe every 0.1s
+
+                // Open encoder first
+                int openResult = ffmpeg.avcodec_open2(encoderCtx, codec, null);
+                if (openResult < 0)
+                {
+                    Tools.Logger.VideoLog.LogCall(this, $"Failed to open {codecName} encoder: {GetFFmpegError(openResult)}");
+                    
+                    // If VideoToolbox failed, try software encoder as fallback
+                    if (codecName.Contains("videotoolbox"))
+                    {
+                        Tools.Logger.VideoLog.LogCall(this, "VideoToolbox failed, falling back to software encoder (libx264)...");
+                        
+                        // Free the VideoToolbox encoder context
+                        fixed (AVCodecContext** pEncoderCtx = &encoderCtx)
+                        {
+                            ffmpeg.avcodec_free_context(pEncoderCtx);
+                        }
+                        
+                        // Find software encoder
+                        codec = ffmpeg.avcodec_find_encoder_by_name("libx264");
+                        if (codec == null)
+                        {
+                            Tools.Logger.VideoLog.LogCall(this, "Software encoder libx264 not found");
+                            return false;
+                        }
+                        codecName = "libx264";
+                        
+                        // Allocate new encoder context for software encoder
+                        encoderCtx = ffmpeg.avcodec_alloc_context3(codec);
+                        if (encoderCtx == null)
+                        {
+                            Tools.Logger.VideoLog.LogCall(this, "Failed to allocate software encoder context");
+                            return false;
+                        }
+                        
+                        // Reconfigure for software encoder
+                        encoderCtx->width = FrameWidth;
+                        encoderCtx->height = FrameHeight;
+                        encoderCtx->pix_fmt = AVPixelFormat.AV_PIX_FMT_YUV420P;
+                        // Configure software encoder for variable frame rate (VFR) to support timestamp-based recording
+                        encoderCtx->time_base = new AVRational { num = 1, den = 90000 }; // 90kHz time base (standard for H.264)
+                        encoderCtx->framerate = new AVRational { num = 0, den = 1 }; // 0 indicates variable frame rate
+                        encoderCtx->bit_rate = 2000000;
+                        encoderCtx->gop_size = Math.Max(1, (int)(frameRate * 0.1f));
+                        
+                        // Software encoder specific options
+                        int ret1 = ffmpeg.av_opt_set(encoderCtx->priv_data, "preset", "fast", 0);
+                        int ret2 = ffmpeg.av_opt_set(encoderCtx->priv_data, "tune", "zerolatency", 0);
+                        Tools.Logger.VideoLog.LogCall(this, $"Software encoder options - preset: {ret1}, tune: {ret2}");
+                        
+                        // Try to open software encoder
+                        openResult = ffmpeg.avcodec_open2(encoderCtx, codec, null);
+                        if (openResult < 0)
+                        {
+                            Tools.Logger.VideoLog.LogCall(this, $"Software encoder also failed: {GetFFmpegError(openResult)}");
+                            return false;
+                        }
+                        Tools.Logger.VideoLog.LogCall(this, "Software encoder (libx264) opened successfully");
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                }
+                else
+                {
+                    Tools.Logger.VideoLog.LogCall(this, $"{codecName} encoder opened successfully");
+                }
+
+                // Copy parameters to stream AFTER encoder is opened
+                if (ffmpeg.avcodec_parameters_from_context(videoStream->codecpar, encoderCtx) < 0)
+                {
+                    Tools.Logger.VideoLog.LogCall(this, "Failed to copy encoder parameters to stream");
+                    return false;
+                }
+                
+                // Configure stream for variable frame rate (VFR) support in external players
+                videoStream->time_base = encoderCtx->time_base; // Use same high-resolution time base
+                videoStream->avg_frame_rate = new AVRational { num = 0, den = 1 }; // Indicate VFR to players
+                videoStream->r_frame_rate = new AVRational { num = 0, den = 1 }; // Real frame rate is variable
+                
+                Tools.Logger.VideoLog.LogCall(this, "Stream configured for variable frame rate (VFR) - external players should use PTS timing");
+
+                // Allocate frame and packet
+                encoderFrame = ffmpeg.av_frame_alloc();
+                encoderPkt = ffmpeg.av_packet_alloc();
+                
+                if (encoderFrame == null || encoderPkt == null)
+                {
+                    Tools.Logger.VideoLog.LogCall(this, "Failed to allocate encoder frame or packet");
+                    return false;
+                }
+
+                // Configure frame with same format as encoder
+                encoderFrame->format = (int)encoderCtx->pix_fmt;
+                encoderFrame->width = FrameWidth;
+                encoderFrame->height = FrameHeight;
+                
+                if (ffmpeg.av_frame_get_buffer(encoderFrame, 32) < 0)
+                {
+                    Tools.Logger.VideoLog.LogCall(this, "Failed to allocate encoder frame buffer");
+                    return false;
+                }
+
+                // Initialize SWS context for RGBA to encoder pixel format conversion
+                AVPixelFormat targetFormat = encoderCtx->pix_fmt;
+                Tools.Logger.VideoLog.LogCall(this, $"Initializing SWS context: RGBA -> {targetFormat}");
+                encoderSws = ffmpeg.sws_getContext(
+                    FrameWidth, FrameHeight, AVPixelFormat.AV_PIX_FMT_RGBA,
+                    FrameWidth, FrameHeight, targetFormat,
+                    ffmpeg.SWS_BILINEAR, null, null, null);
+                
+                if (encoderSws == null)
+                {
+                    Tools.Logger.VideoLog.LogCall(this, "Failed to initialize SWS context for recording");
+                    return false;
+                }
+
+                // Open output file
+                if ((outputFmt->oformat->flags & ffmpeg.AVFMT_NOFILE) == 0)
+                {
+                    if (ffmpeg.avio_open(&outputFmt->pb, filename, ffmpeg.AVIO_FLAG_WRITE) < 0)
+                    {
+                        Tools.Logger.VideoLog.LogCall(this, $"Failed to open output file: {filename}");
+                        return false;
+                    }
+                }
+
+                // NOTE: We will write the header after the first frame is successfully encoded
+                // This is required for VideoToolbox as it needs to process at least one frame
+                // to determine the correct stream parameters
+                Tools.Logger.VideoLog.LogCall(this, "Output file opened, header will be written after first frame");
+
+                // Allow encoder to settle before processing frames
+                System.Threading.Thread.Sleep(100); // 100ms delay
+                
+                // Mark encoder as ready
+                encoderReady = true;
+                Tools.Logger.VideoLog.LogCall(this, $"Native recording initialized successfully using {codecName} - encoder ready");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Tools.Logger.VideoLog.LogCall(this, $"Exception initializing native recording: {ex.Message}");
+                return false;
+            }
+        }
+
+        private unsafe void WriteFrameToRecording(byte* rgbaData)
+        {
+            if (!Recording || encoderCtx == null || encoderFrame == null || !encoderReady)
+            {
+                if (!Recording) Tools.Logger.VideoLog.LogCall(this, "WriteFrameToRecording: Not recording");
+                if (encoderCtx == null) Tools.Logger.VideoLog.LogCall(this, "WriteFrameToRecording: encoderCtx is null");
+                if (encoderFrame == null) Tools.Logger.VideoLog.LogCall(this, "WriteFrameToRecording: encoderFrame is null");
+                if (!encoderReady) Tools.Logger.VideoLog.LogCall(this, "WriteFrameToRecording: Encoder not ready yet");
+                return;
+            }
+
+            try
+            {
+                // Log frame writing progress occasionally
+                if (recordingPts % 30 == 0) // Every 30 frames (about 1 second at 30fps)
+                {
+                    Tools.Logger.VideoLog.LogCall(this, $"WriteFrameToRecording: Writing frame {recordingPts}");
+                }
+
+                // Convert RGBA to YUV420P
+                byte_ptrArray4 srcData = new byte_ptrArray4();
+                int_array4 srcLinesize = new int_array4();
+                srcData[0] = rgbaData;
+                srcLinesize[0] = FrameWidth * 4; // RGBA stride
+
+                int scaleResult = ffmpeg.sws_scale(encoderSws, srcData, srcLinesize, 0, FrameHeight,
+                    encoderFrame->data, encoderFrame->linesize);
+                if (scaleResult != FrameHeight)
+                {
+                    Tools.Logger.VideoLog.LogCall(this, $"WriteFrameToRecording: sws_scale returned {scaleResult}, expected {FrameHeight}");
+                }
+
+                // Calculate PTS based on actual timestamp instead of frame counter
+                DateTime currentFrameTime = DateTime.Now;
+                TimeSpan timeSinceRecordingStart = currentFrameTime - recordingStartTime;
+                
+                // Convert timestamp to encoder time_base units for proper PTS
+                // encoder time_base is typically 1/framerate (e.g., 1/30 for 30fps)
+                double timebaseSeconds = (double)encoderCtx->time_base.num / encoderCtx->time_base.den;
+                long calculatedPts = (long)(timeSinceRecordingStart.TotalSeconds / timebaseSeconds);
+                
+                encoderFrame->pts = calculatedPts;
+                
+                // Log timing occasionally for debugging
+                if (recordingPts % 30 == 0)
+                {
+                    Tools.Logger.VideoLog.LogCall(this, $"WriteFrameToRecording: Frame {recordingPts} PTS={calculatedPts} (time: {timeSinceRecordingStart.TotalSeconds:F3}s, timebase: {timebaseSeconds:F6}s)");
+                }
+                recordingPts++; // Keep counter for logging purposes
+
+                // Encode frame
+                Tools.Logger.VideoLog.LogCall(this, $"WriteFrameToRecording: Sending frame {recordingPts} to encoder");
+                int ret = ffmpeg.avcodec_send_frame(encoderCtx, encoderFrame);
+                Tools.Logger.VideoLog.LogCall(this, $"WriteFrameToRecording: avcodec_send_frame returned: {ret}");
+                
+                if (ret < 0)
+                {
+                    Tools.Logger.VideoLog.LogCall(this, $"WriteFrameToRecording: Error sending frame to encoder: {GetFFmpegError(ret)} (code: {ret})");
+                    
+                    // Check if this is a VideoToolbox encoding error (-12912)
+                    if (ret == -12912 && recordingPts == 0) // Only try fallback on first frame
+                    {
+                        Tools.Logger.VideoLog.LogCall(this, "WriteFrameToRecording: VideoToolbox encoding failed, attempting software fallback...");
+                        
+                        // Stop current recording and restart with software encoder
+                        Recording = false;
+                        CleanupNativeRecording();
+                        
+                        // Reinitialize with software encoder forced
+                        if (InitializeNativeRecordingSoftware(recordingFilename))
+                        {
+                            Tools.Logger.VideoLog.LogCall(this, "WriteFrameToRecording: Successfully switched to software encoder");
+                            // Retry encoding with software encoder
+                            ret = ffmpeg.avcodec_send_frame(encoderCtx, encoderFrame);
+                            if (ret < 0)
+                            {
+                                Tools.Logger.VideoLog.LogCall(this, $"WriteFrameToRecording: Software encoder also failed: {GetFFmpegError(ret)}");
+                                return;
+                            }
+                            Recording = true; // Re-enable recording
+                            Tools.Logger.VideoLog.LogCall(this, "WriteFrameToRecording: Software encoder frame encoding succeeded");
+                        }
+                        else
+                        {
+                            Tools.Logger.VideoLog.LogCall(this, "WriteFrameToRecording: Software fallback initialization failed");
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        return;
+                    }
+                }
+
+                // Retrieve encoded packets first (VideoToolbox may need to flush before header writing)
+                int packetsReceived = 0;
+                while (ret >= 0)
+                {
+                    ret = ffmpeg.avcodec_receive_packet(encoderCtx, encoderPkt);
+                    if (ret == ffmpeg.AVERROR(ffmpeg.EAGAIN) || ret == ffmpeg.AVERROR_EOF)
+                        break;
+                    
+                    if (ret < 0)
+                    {
+                        Tools.Logger.VideoLog.LogCall(this, $"WriteFrameToRecording: Error receiving packet from encoder: {GetFFmpegError(ret)}");
+                        break;
+                    }
+                    
+                    packetsReceived++;
+
+                    // Write header after receiving first packet (when encoder parameters are fully finalized)
+                    if (!headerWritten)
+                    {
+                        Tools.Logger.VideoLog.LogCall(this, $"WriteFrameToRecording: Received first packet ({packetsReceived}), attempting to write file header");
+                        Tools.Logger.VideoLog.LogCall(this, $"WriteFrameToRecording: Encoder state - width: {encoderCtx->width}, height: {encoderCtx->height}, pix_fmt: {encoderCtx->pix_fmt}");
+                        
+                        // Update stream parameters after first packet (VideoToolbox finalizes parameters after first packet)
+                        Tools.Logger.VideoLog.LogCall(this, "WriteFrameToRecording: Updating stream parameters after first packet");
+                        int paramResult = ffmpeg.avcodec_parameters_from_context(videoStream->codecpar, encoderCtx);
+                        if (paramResult < 0)
+                        {
+                            Tools.Logger.VideoLog.LogCall(this, $"WriteFrameToRecording: Failed to update stream parameters: {GetFFmpegError(paramResult)}");
+                            ffmpeg.av_packet_unref(encoderPkt);
+                            return;
+                        }
+                        Tools.Logger.VideoLog.LogCall(this, "WriteFrameToRecording: Stream parameters updated successfully");
+                        
+                        int headerResult = ffmpeg.avformat_write_header(outputFmt, null);
+                        if (headerResult < 0)
+                        {
+                            Tools.Logger.VideoLog.LogCall(this, $"WriteFrameToRecording: Failed to write file header: {GetFFmpegError(headerResult)} (code: {headerResult})");
+                            
+                            // If VideoToolbox header writing fails, try MP4 container first, then software fallback
+                            if (headerResult == -1094995529) // AVERROR_INVALIDDATA - VideoToolbox/MKV incompatibility
+                            {
+                                Tools.Logger.VideoLog.LogCall(this, "WriteFrameToRecording: VideoToolbox header incompatible with MKV container");
+                                
+                                // Stop current recording and try MP4 container with VideoToolbox
+                                Recording = false;
+                                CleanupNativeRecording();
+                                
+                                // Try MP4 container with same VideoToolbox encoder
+                                if (recordingFilename.EndsWith(".mkv"))
+                                {
+                                    string mp4Filename = recordingFilename.Replace(".mkv", ".mp4");
+                                    Tools.Logger.VideoLog.LogCall(this, $"WriteFrameToRecording: Trying VideoToolbox with MP4 container: {mp4Filename}");
+                                    
+                                    if (InitializeNativeRecordingWithCodec(mp4Filename, "h264_videotoolbox"))
+                                    {
+                                        Recording = true;
+                                        recordingFilename = mp4Filename; // Update filename for MP4
+                                        Tools.Logger.VideoLog.LogCall(this, "WriteFrameToRecording: Successfully switched to VideoToolbox + MP4 container");
+                                        ffmpeg.av_packet_unref(encoderPkt);
+                                        return; // Exit this frame, next frame will use MP4 container
+                                    }
+                                    else
+                                    {
+                                        Tools.Logger.VideoLog.LogCall(this, "WriteFrameToRecording: VideoToolbox + MP4 fallback also failed");
+                                    }
+                                }
+                                
+                                // If MP4 failed, try software encoder fallback
+                                Tools.Logger.VideoLog.LogCall(this, "WriteFrameToRecording: Trying software encoder as final fallback");
+                                if (InitializeNativeRecordingSoftware(recordingFilename))
+                                {
+                                    Recording = true;
+                                    Tools.Logger.VideoLog.LogCall(this, "WriteFrameToRecording: Successfully switched to software encoder for recording");
+                                    ffmpeg.av_packet_unref(encoderPkt);
+                                    return; // Exit this frame, next frame will use software encoder
+                                }
+                                else
+                                {
+                                    Tools.Logger.VideoLog.LogCall(this, "WriteFrameToRecording: All fallback attempts failed");
+                                }
+                            }
+                            
+                            // Mark header as written to prevent infinite retries
+                            headerWritten = true;
+                            ffmpeg.av_packet_unref(encoderPkt);
+                            return;
+                        }
+                        headerWritten = true;
+                        Tools.Logger.VideoLog.LogCall(this, "WriteFrameToRecording: File header written successfully");
+                    }
+
+                    // Rescale packet timing
+                    ffmpeg.av_packet_rescale_ts(encoderPkt, encoderCtx->time_base, videoStream->time_base);
+                    encoderPkt->stream_index = videoStream->index;
+
+                    // Write packet to file
+                    ret = ffmpeg.av_interleaved_write_frame(outputFmt, encoderPkt);
+                    if (ret < 0)
+                    {
+                        Tools.Logger.VideoLog.LogCall(this, $"WriteFrameToRecording: Error writing packet: {GetFFmpegError(ret)}");
+                    }
+
+                    ffmpeg.av_packet_unref(encoderPkt);
+                }
+
+                // Log packet writing progress occasionally
+                if (recordingPts % 30 == 1 && packetsReceived > 0) // Every 30 frames
+                {
+                    Tools.Logger.VideoLog.LogCall(this, $"WriteFrameToRecording: Frame {recordingPts-1} wrote {packetsReceived} packets");
+                }
+            }
+            catch (Exception ex)
+            {
+                Tools.Logger.VideoLog.LogCall(this, $"WriteFrameToRecording: Exception: {ex.Message}");
+            }
+        }
+
+        private unsafe void FinalizeNativeRecording()
+        {
+            try
+            {
+                Tools.Logger.VideoLog.LogCall(this, "FinalizeNativeRecording: Starting finalization");
+                
+                if (outputFmt != null)
+                {
+                    // Write header if it hasn't been written yet (in case no frames were processed)
+                    if (!headerWritten)
+                    {
+                        Tools.Logger.VideoLog.LogCall(this, "FinalizeNativeRecording: Writing header (no frames were processed)");
+                        int headerResult = ffmpeg.avformat_write_header(outputFmt, null);
+                        if (headerResult < 0)
+                        {
+                            Tools.Logger.VideoLog.LogCall(this, $"FinalizeNativeRecording: Failed to write header: {GetFFmpegError(headerResult)}");
+                        }
+                        else
+                        {
+                            headerWritten = true;
+                        }
+                    }
+
+                    // Flush encoder
+                    if (encoderCtx != null && encoderPkt != null)
+                    {
+                        Tools.Logger.VideoLog.LogCall(this, "FinalizeNativeRecording: Flushing encoder");
+                        int sendResult = ffmpeg.avcodec_send_frame(encoderCtx, null); // Flush
+                        if (sendResult < 0 && sendResult != ffmpeg.AVERROR_EOF)
+                        {
+                            Tools.Logger.VideoLog.LogCall(this, $"FinalizeNativeRecording: Error flushing encoder: {GetFFmpegError(sendResult)}");
+                        }
+                        
+                        int ret;
+                        int flushPackets = 0;
+                        while ((ret = ffmpeg.avcodec_receive_packet(encoderCtx, encoderPkt)) >= 0)
+                        {
+                            if (videoStream != null)
+                            {
+                                ffmpeg.av_packet_rescale_ts(encoderPkt, encoderCtx->time_base, videoStream->time_base);
+                                encoderPkt->stream_index = videoStream->index;
+                                int writeResult = ffmpeg.av_interleaved_write_frame(outputFmt, encoderPkt);
+                                if (writeResult < 0)
+                                {
+                                    Tools.Logger.VideoLog.LogCall(this, $"FinalizeNativeRecording: Error writing flush packet: {GetFFmpegError(writeResult)}");
+                                }
+                                else
+                                {
+                                    flushPackets++;
+                                }
+                            }
+                            ffmpeg.av_packet_unref(encoderPkt);
+                        }
+                        Tools.Logger.VideoLog.LogCall(this, $"FinalizeNativeRecording: Flushed {flushPackets} packets");
+                    }
+
+                    // Write file trailer
+                    if (headerWritten)
+                    {
+                        Tools.Logger.VideoLog.LogCall(this, "FinalizeNativeRecording: Writing trailer");
+                        int trailerResult = ffmpeg.av_write_trailer(outputFmt);
+                        if (trailerResult < 0)
+                        {
+                            Tools.Logger.VideoLog.LogCall(this, $"FinalizeNativeRecording: Error writing trailer: {GetFFmpegError(trailerResult)}");
+                        }
+                    }
+
+                    // Close output file
+                    if ((outputFmt->oformat->flags & ffmpeg.AVFMT_NOFILE) == 0 && outputFmt->pb != null)
+                    {
+                        Tools.Logger.VideoLog.LogCall(this, "FinalizeNativeRecording: Closing output file");
+                        ffmpeg.avio_closep(&outputFmt->pb);
+                    }
+                }
+
+                // Generate .recordinfo.xml file
+                GenerateRecordInfoFile(recordingFilename);
+
+                Tools.Logger.VideoLog.LogCall(this, "Native recording finalized successfully");
+            }
+            catch (Exception ex)
+            {
+                Tools.Logger.VideoLog.LogCall(this, $"Exception finalizing native recording: {ex.Message}");
+            }
+            finally
+            {
+                CleanupNativeRecording();
+            }
+        }
+
+        private unsafe void CleanupNativeRecording()
+        {
+            try
+            {
+                Tools.Logger.VideoLog.LogCall(this, "CleanupNativeRecording: Starting cleanup");
+                
+                if (encoderSws != null) 
+                { 
+                    ffmpeg.sws_freeContext(encoderSws); 
+                    encoderSws = null; 
+                    Tools.Logger.VideoLog.LogCall(this, "CleanupNativeRecording: SWS context freed");
+                }
+                
+                if (encoderFrame != null) 
+                { 
+                    fixed (AVFrame** pEncoderFrame = &encoderFrame)
+                    {
+                        ffmpeg.av_frame_free(pEncoderFrame); 
+                    }
+                    encoderFrame = null; 
+                    Tools.Logger.VideoLog.LogCall(this, "CleanupNativeRecording: Encoder frame freed");
+                }
+                
+                if (encoderPkt != null) 
+                { 
+                    fixed (AVPacket** pEncoderPkt = &encoderPkt)
+                    {
+                        ffmpeg.av_packet_free(pEncoderPkt); 
+                    }
+                    encoderPkt = null; 
+                    Tools.Logger.VideoLog.LogCall(this, "CleanupNativeRecording: Encoder packet freed");
+                }
+                
+                if (encoderCtx != null) 
+                { 
+                    fixed (AVCodecContext** pEncoderCtx = &encoderCtx)
+                    {
+                        ffmpeg.avcodec_free_context(pEncoderCtx); 
+                    }
+                    encoderCtx = null; 
+                    Tools.Logger.VideoLog.LogCall(this, "CleanupNativeRecording: Encoder context freed");
+                }
+                
+                if (outputFmt != null)
+                {
+                    fixed (AVFormatContext** pOutputFmt = &outputFmt)
+                    {
+                        ffmpeg.avformat_free_context(*pOutputFmt);
+                    }
+                    outputFmt = null;
+                    Tools.Logger.VideoLog.LogCall(this, "CleanupNativeRecording: Output format freed");
+                }
+                
+                // Reset state variables
+                headerWritten = false;
+                encoderReady = false;
+                videoStream = null;
+                
+                Tools.Logger.VideoLog.LogCall(this, "CleanupNativeRecording: Cleanup completed successfully");
+            }
+            catch (Exception ex)
+            {
+                Tools.Logger.VideoLog.LogCall(this, $"CleanupNativeRecording: Exception during cleanup: {ex.Message}");
+            }
+        }
+
+        private void GenerateRecordInfoFile(string videoFilePath)
+        {
+            try
+            {
+                // For now, just log that we would generate the file
+                // The full implementation would depend on the application's recording info structure
+                Tools.Logger.VideoLog.LogCall(this, $"Would generate .recordinfo.xml file for: {videoFilePath}");
+                Tools.Logger.VideoLog.LogCall(this, $"Frame times count: {frameTimes.Count}");
+                
+                // TODO: Implement actual XML generation based on application requirements
+            }
+            catch (Exception ex)
+            {
+                Tools.Logger.VideoLog.LogCall(this, $"Failed to generate .recordinfo.xml file: {ex.Message}");
+            }
+        }
+
         public override void Dispose()
         {
             Tools.Logger.VideoLog.LogCall(this, "Disposing native AVFoundation frame source");
             
-            // Stop and dispose RGBA recorder
-            rgbaRecorderManager?.Dispose();
+            if (Recording && nativeRecordingEnabled)
+            {
+                StopRecording();
+            }
             
             Stop();
             CleanUp();
@@ -870,6 +1799,9 @@ namespace FfmpegMediaPlatform
         {
             run = false;
             readerThread = null;
+
+            // Cleanup native recording
+            CleanupNativeRecording();
 
             if (sws != null) { ffmpeg.sws_freeContext(sws); sws = null; }
             if (frame != null) { ffmpeg.av_frame_unref(frame); ffmpeg.av_free(frame); frame = null; }

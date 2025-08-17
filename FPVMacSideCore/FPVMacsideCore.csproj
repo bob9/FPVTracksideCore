@@ -57,3 +57,4 @@
     <Exec Command="$(ProjectDir)fix-icon.sh &quot;$(OutputPath)FPV Trackside Core.app&quot; &quot;$(ProjectDir)AppIcon.icns&quot;" />
   </Target>
 </Project>
+

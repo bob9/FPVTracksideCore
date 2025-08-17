@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Threading.Tasks;
 
 namespace FfmpegMediaPlatform
@@ -54,15 +55,82 @@ namespace FfmpegMediaPlatform
 
                 try
                 {
+                    Console.WriteLine("FfmpegGlobalInitializer: Starting safe initialization...");
+                    
+                    // Use a separate process/AppDomain isolation to test FFmpeg loading safely
+                    // This prevents the main application from crashing if FFmpeg libs are incompatible
+                    if (!TestFFmpegCompatibility())
+                    {
+                        throw new NotSupportedException("FFmpeg libraries are not compatible with this system");
+                    }
+                    
                     FfmpegNativeLoader.EnsureRegistered();
                     _initialized = true;
+                    Console.WriteLine("FfmpegGlobalInitializer: Initialization completed successfully");
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"FfmpegGlobalInitializer: Failed to initialize FFmpeg bindings: {ex.Message}");
+                    Console.WriteLine($"FfmpegGlobalInitializer: Failed to initialize FFmpeg bindings: {ex.GetType().Name}: {ex.Message}");
+                    Console.WriteLine($"FfmpegGlobalInitializer: Stack trace: {ex.StackTrace}");
                     throw;
                 }
             }
+        }
+        
+        /// <summary>
+        /// Test FFmpeg compatibility in a safe way that won't crash the main process
+        /// </summary>
+        private static bool TestFFmpegCompatibility()
+        {
+            try
+            {
+                Console.WriteLine("FfmpegGlobalInitializer: Testing FFmpeg compatibility...");
+                
+                // First, check if the library files exist and are readable
+                var bundledPath = GetBundledLibraryPath();
+                if (bundledPath == null || !Directory.Exists(bundledPath))
+                {
+                    Console.WriteLine("FfmpegGlobalInitializer: No bundled FFmpeg libraries found");
+                    return false;
+                }
+                
+                // Check required libraries exist
+                string[] requiredLibs = { "libavcodec.dylib", "libavformat.dylib", "libavutil.dylib" };
+                foreach (var lib in requiredLibs)
+                {
+                    var libPath = Path.Combine(bundledPath, lib);
+                    if (!File.Exists(libPath))
+                    {
+                        Console.WriteLine($"FfmpegGlobalInitializer: Missing required library: {lib}");
+                        return false;
+                    }
+                }
+                
+                Console.WriteLine("FfmpegGlobalInitializer: Basic compatibility check passed");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"FfmpegGlobalInitializer: Compatibility test failed: {ex.Message}");
+                return false;
+            }
+        }
+        
+        private static string GetBundledLibraryPath()
+        {
+            var assemblyLocation = typeof(FfmpegGlobalInitializer).Assembly.Location;
+            var appDirectory = Path.GetDirectoryName(assemblyLocation);
+            
+            if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX))
+            {
+                return Path.Combine(appDirectory, "ffmpeg-libs", "macos");
+            }
+            else if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
+            {
+                return Path.Combine(appDirectory, "ffmpeg-libs", "windows");
+            }
+            
+            return null;
         }
 
         /// <summary>

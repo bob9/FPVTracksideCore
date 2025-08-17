@@ -188,6 +188,10 @@ namespace FfmpegMediaPlatform
 
         public FrameSource CreateFrameSource(VideoConfig vc)
         {
+            // Use feature flag system to control native library usage
+            bool useNativeLibraries = FfmpegFeatureFlags.UseNativeLibraries;
+            Tools.Logger.VideoLog.LogCall(this, $"CreateFrameSource: Native libraries enabled = {useNativeLibraries}");
+            
             // Check if this is a video file playback (has FilePath) or camera capture
             if (!string.IsNullOrEmpty(vc.FilePath))
             {
@@ -223,9 +227,48 @@ namespace FfmpegMediaPlatform
             }
             else
             {
-                // Live camera capture via ffmpeg process with HLS composite
-                Tools.Logger.VideoLog.LogCall(this, $"PLAYBACK PATH: Live capture via ffmpeg (HLS composite) → {vc.DeviceName}");
-                return new FfmpegHlsCompositeFrameSource(this, vc);
+                // Live camera capture - try native libraries first if enabled, fallback to HLS composite
+                if (useNativeLibraries && System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX))
+                {
+                    try
+                    {
+                        Tools.Logger.VideoLog.LogCall(this, $"CAMERA PATH: Attempting native ffmpeg lib (AVFoundation) for Mac camera → {vc.DeviceName}");
+                        return new FfmpegLibAvFoundationFrameSource(this, vc);
+                    }
+                    catch (NotSupportedException ex)
+                    {
+                        Tools.Logger.VideoLog.LogCall(this, $"Native AVFoundation not supported: {ex.Message}");
+                        Tools.Logger.VideoLog.LogCall(this, $"CAMERA PATH FALLBACK: HLS composite for Mac camera → {vc.DeviceName}");
+                        return new FfmpegHlsCompositeFrameSource(this, vc);
+                    }
+                    catch (Exception ex)
+                    {
+                        Tools.Logger.VideoLog.LogCall(this, $"Native AVFoundation failed unexpectedly: {ex.GetType().Name}: {ex.Message}");
+                        Tools.Logger.VideoLog.LogCall(this, $"CAMERA PATH FALLBACK: HLS composite for Mac camera → {vc.DeviceName}");
+                        return new FfmpegHlsCompositeFrameSource(this, vc);
+                    }
+                }
+                else if (useNativeLibraries && System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
+                {
+                    try
+                    {
+                        Tools.Logger.VideoLog.LogCall(this, $"CAMERA PATH: Native ffmpeg lib (DirectShow) for Windows camera → {vc.DeviceName}");
+                        return new FfmpegLibDshowFrameSource(this, vc);
+                    }
+                    catch (Exception ex)
+                    {
+                        Tools.Logger.VideoLog.LogCall(this, $"Native DirectShow failed, falling back to HLS composite: {ex.Message}");
+                        Tools.Logger.VideoLog.LogCall(this, $"CAMERA PATH FALLBACK: HLS composite for Windows camera → {vc.DeviceName}");
+                        return new FfmpegHlsCompositeFrameSource(this, vc);
+                    }
+                }
+                else
+                {
+                    // For other platforms or when native libraries disabled, use HLS composite
+                    string reason = !useNativeLibraries ? "native libraries disabled" : "unsupported platform";
+                    Tools.Logger.VideoLog.LogCall(this, $"CAMERA PATH: HLS composite ({reason}) → {vc.DeviceName}");
+                    return new FfmpegHlsCompositeFrameSource(this, vc);
+                }
             }
         }
 

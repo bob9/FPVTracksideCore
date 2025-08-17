@@ -7,7 +7,7 @@ using FFmpeg.AutoGen;
 
 namespace FfmpegMediaPlatform
 {
-    internal static class FfmpegNativeLoader
+    internal static unsafe class FfmpegNativeLoader
     {
         [DllImport("kernel32", SetLastError = true, CharSet = CharSet.Unicode)]
         private static extern IntPtr LoadLibrary(string lpFileName);
@@ -16,9 +16,10 @@ namespace FfmpegMediaPlatform
         private static readonly Dictionary<string, IntPtr> handleCache = new();
         private static readonly string[] rootCandidates = new[]
         {
-            GetBundledLibraryPath(),                   // bundled libraries first
+            "/opt/homebrew/opt/ffmpeg/lib",            // system Homebrew FFmpeg first (most compatible)
+            "/usr/local/opt/ffmpeg/lib",               // Intel Mac Homebrew path
             "/opt/homebrew/Cellar/ffmpeg/7.1.1_3/lib", // user-provided versioned path
-            "/opt/homebrew/opt/ffmpeg/lib"             // stable symlink
+            GetBundledLibraryPath()                    // bundled libraries last (problematic)
         };
 
         private static string GetBundledLibraryPath()
@@ -194,52 +195,98 @@ namespace FfmpegMediaPlatform
                     Console.WriteLine("Skipping library pre-loading on macOS (not needed with FFmpeg.AutoGen)");
                 }
 
-                // Force FFmpeg.AutoGen to initialize with the new path
+                // Try a different approach: manually ensure library loading
                 try
                 {
-                    Console.WriteLine("Testing FFmpeg.AutoGen initialization...");
-                    Console.WriteLine($"ffmpeg.RootPath is set to: {ffmpeg.RootPath}");
-
-                    ffmpeg.av_log_set_level(ffmpeg.AV_LOG_INFO);
-
-                    // Call a simple FFmpeg function to trigger initialization
+                    Console.WriteLine("Attempting manual library loading with System.Runtime.InteropServices...");
+                    
+                    // Try to manually load the libraries first
+                    var libAvUtilPath = Path.Combine(bundledPath, "libavutil.dylib");
+                    var libAvCodecPath = Path.Combine(bundledPath, "libavcodec.dylib");
+                    var libAvFormatPath = Path.Combine(bundledPath, "libavformat.dylib");
+                    
+                    Console.WriteLine($"Manually loading: {libAvUtilPath}");
+                    var utilHandle = NativeLibrary.Load(libAvUtilPath);
+                    Console.WriteLine($"libavutil loaded: {utilHandle}");
+                    
+                    Console.WriteLine($"Manually loading: {libAvCodecPath}");
+                    var codecHandle = NativeLibrary.Load(libAvCodecPath);
+                    Console.WriteLine($"libavcodec loaded: {codecHandle}");
+                    
+                    Console.WriteLine($"Manually loading: {libAvFormatPath}");
+                    var formatHandle = NativeLibrary.Load(libAvFormatPath);
+                    Console.WriteLine($"libavformat loaded: {formatHandle}");
+                    
+                    // Now set the FFmpeg.AutoGen path
+                    ffmpeg.RootPath = bundledPath;
+                    Console.WriteLine($"FFmpeg.AutoGen RootPath set to: {ffmpeg.RootPath}");
+                    
+                    // Try a test function call
+                    Console.WriteLine("Testing av_version_info after manual loading...");
                     var version = ffmpeg.av_version_info();
-                    Console.WriteLine($"FFmpeg version: {version}");
-
-                    // Test a few more functions to verify bindings
-                    var codecVersion = ffmpeg.avcodec_version();
-                    var formatVersion = ffmpeg.avformat_version();
-                    Console.WriteLine($"Codec version: {codecVersion}");
-                    Console.WriteLine($"Format version: {formatVersion}");
+                    Console.WriteLine($"SUCCESS: FFmpeg version: {version}");
+                    
+                    // Try to register device formats to enable protocols
+                    Console.WriteLine("Registering device formats and protocols...");
+                    try
+                    {
+                        ffmpeg.avdevice_register_all();
+                        Console.WriteLine("SUCCESS: Device formats and protocols registered");
+                    }
+                    catch (Exception regEx)
+                    {
+                        Console.WriteLine($"Device registration failed: {regEx.Message}");
+                        Console.WriteLine("Will attempt to use AVFoundation anyway - the protocol might still work");
+                    }
                 }
-                catch (Exception ex)
+                catch (Exception manualEx)
                 {
-                    Console.WriteLine($"FFmpeg initialization test failed: {ex.GetType().Name}: {ex.Message}");
-                    Console.WriteLine($"Stack trace: {ex.StackTrace}");
-                    throw new NotSupportedException($"FFmpeg initialization failed. The libraries may be incompatible or dependencies are missing: {ex.Message}", ex);
+                    Console.WriteLine($"Manual library loading failed: {manualEx.Message}");
+                    Console.WriteLine("Falling back to standard FFmpeg.AutoGen initialization...");
+                    
+                    ffmpeg.RootPath = bundledPath;
+                    Console.WriteLine($"FFmpeg.AutoGen RootPath set to: {ffmpeg.RootPath}");
+                    Console.WriteLine("WARNING: Native FFmpeg may have compatibility issues.");
                 }
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
-                Console.WriteLine($"FfmpegNativeLoader.EnsureRegistered: Bundled path not found or doesn't exist");
+                Console.WriteLine($"FfmpegNativeLoader.EnsureRegistered: Bundled path failed, trying system paths...");
                 Console.WriteLine($"FfmpegNativeLoader.EnsureRegistered: bundledPath = {bundledPath}");
-                Console.WriteLine($"FfmpegNativeLoader.EnsureRegistered: Directory.Exists = {(bundledPath != null ? Directory.Exists(bundledPath) : "bundledPath is null")}");
                 
-                // Fallback to system paths for Mac
-                Console.WriteLine("FfmpegNativeLoader.EnsureRegistered: Trying system paths...");
-                foreach (var root in rootCandidates.Skip(1)) // Skip the bundled path
+                // Try alternative paths for Mac
+                bool foundWorkingPath = false;
+                foreach (var root in rootCandidates)
                 {
-                    Console.WriteLine($"FfmpegNativeLoader.EnsureRegistered: Checking system path: {root}");
-                    if (Directory.Exists(root))
+                    Console.WriteLine($"FfmpegNativeLoader.EnsureRegistered: Checking path: {root}");
+                    if (root != null && Directory.Exists(root))
                     {
-                        ffmpeg.RootPath = root;
-                        Console.WriteLine($"FFmpeg native libraries loaded from system path: {root}");
-                        break;
+                        try
+                        {
+                            Console.WriteLine($"FfmpegNativeLoader.EnsureRegistered: Testing path: {root}");
+                            ffmpeg.RootPath = root;
+                            
+                            // Test with a simple function call
+                            var testVersion = ffmpeg.av_version_info();
+                            Console.WriteLine($"FFmpeg native libraries loaded successfully from: {root} (version: {testVersion})");
+                            foundWorkingPath = true;
+                            break;
+                        }
+                        catch (Exception testEx)
+                        {
+                            Console.WriteLine($"FfmpegNativeLoader.EnsureRegistered: Path {root} failed test: {testEx.Message}");
+                            continue;
+                        }
                     }
                     else
                     {
-                        Console.WriteLine($"FfmpegNativeLoader.EnsureRegistered: System path does not exist: {root}");
+                        Console.WriteLine($"FfmpegNativeLoader.EnsureRegistered: Path does not exist: {root}");
                     }
+                }
+                
+                if (!foundWorkingPath)
+                {
+                    throw new NotSupportedException("No working FFmpeg libraries found in any of the candidate paths. Please install FFmpeg via Homebrew: brew install ffmpeg");
                 }
             }
             else

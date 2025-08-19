@@ -69,6 +69,15 @@ namespace FfmpegMediaPlatform
         
         // Frame timing tracking for camera loop
         private DateTime lastFrameTime = DateTime.MinValue;
+        
+        // Display latency tracking
+        private DateTime frameCaptureTime = DateTime.MinValue;
+        
+        // FUTURE OPTIMIZATION: Zero-copy pipe implementation
+        // TODO: Direct FFmpeg→GPU memory mapping using:
+        // - Windows: D3D11 shared textures with FFmpeg hardware decoders
+        // - macOS: Metal shared buffers with VideoToolbox acceleration
+        // This would eliminate all CPU memory copies for ultimate performance
         private float measuredFrameRate = 0f;
         private bool frameRateMeasured = false;
         
@@ -762,25 +771,21 @@ namespace FfmpegMediaPlatform
                             Tools.Logger.VideoLog.LogCall(this, $"CAMERA LOOP: Complete frame read: {totalBytesRead} bytes, frame {FrameProcessNumber}");
                         }
                         
-                        // PERFORMANCE: Queue frame for parallel processing to avoid blocking camera read
+                        // PERFORMANCE OPTIMIZATION: Process frames directly without copying for live display
                         DateTime frameTimestamp = DateTime.UtcNow;
-                        byte[] frameDataCopy = new byte[buffer.Length];
+                        frameCaptureTime = frameTimestamp; // Capture frame timestamp for display latency measurement
                         
-                        // Use fast buffer copy for the queue
-                        if (buffer.Length > 2 * 1024 * 1024) // 2MB threshold for 4K
-                        {
-                            Buffer.BlockCopy(buffer, 0, frameDataCopy, 0, buffer.Length);
-                        }
-                        else
-                        {
-                            Buffer.BlockCopy(buffer, 0, frameDataCopy, 0, buffer.Length);
-                        }
-                        
-                        frameProcessingQueue.Enqueue((frameDataCopy, frameTimestamp, FrameProcessNumber + 1));
-                        frameProcessingSemaphore.Release();
-                        
-                        // Also call direct processing for immediate display responsiveness
+                        // ZERO-COPY OPTIMIZATION: Process display immediately using original buffer
                         ProcessCameraFrame();
+                        
+                        // RECORDING ONLY: Queue frame copy for recording if needed (async)
+                        if (Recording && rgbaRecorderManager?.IsRecording == true)
+                        {
+                            byte[] frameDataCopy = new byte[buffer.Length];
+                            Buffer.BlockCopy(buffer, 0, frameDataCopy, 0, buffer.Length);
+                            frameProcessingQueue.Enqueue((frameDataCopy, frameTimestamp, FrameProcessNumber));
+                            frameProcessingSemaphore.Release();
+                        }
                         
                         consecutiveErrors = 0; // Reset error counter on successful frame
                         Connected = true; // Ensure we're marked as connected when receiving data
@@ -1179,16 +1184,26 @@ namespace FfmpegMediaPlatform
                         }
                     }
                     
-                    // Convert byte[] to IntPtr for SetData call
-                    System.Runtime.InteropServices.GCHandle handle = System.Runtime.InteropServices.GCHandle.Alloc(buffer, System.Runtime.InteropServices.GCHandleType.Pinned);
-                    try
+                    // PERFORMANCE: Direct buffer upload without pinning overhead for streaming
+                    unsafe
                     {
-                        IntPtr bufferPtr = handle.AddrOfPinnedObject();
-                        frame.SetData(bufferPtr, SampleTime, FrameProcessNumber);
-                    }
-                    finally
-                    {
-                        handle.Free();
+                        fixed (byte* bufferPtr = buffer)
+                        {
+                            frame.SetData(new IntPtr(bufferPtr), SampleTime, FrameProcessNumber);
+                            
+                            // DISPLAY LATENCY MEASUREMENT: Calculate frame capture to GPU upload latency
+                            if (frameCaptureTime != DateTime.MinValue)
+                            {
+                                double displayLatencyMs = (DateTime.UtcNow - frameCaptureTime).TotalMilliseconds;
+                                
+                                // Log display latency every 150 frames (5 seconds at 30fps) for performance monitoring
+                                if (FrameProcessNumber % 150 == 0)
+                                {
+                                    string platform = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows) ? "Windows" : "Mac";
+                                    Tools.Logger.VideoLog.LogCall(this, $"DISPLAY LATENCY [{platform}]: {displayLatencyMs:F1}ms from capture to GPU upload (frame {FrameProcessNumber}) - OPTIMIZED");
+                                }
+                            }
+                        }
                     }
                     
                     // Make frame available for game engine display

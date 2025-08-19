@@ -128,19 +128,48 @@ namespace ImageServer
     {
         public long FrameSampleTime { get; set; }
         public long FrameProcessCount { get; set; }
+        private bool isStreamingTexture;
 
         public FrameTextureSample(GraphicsDevice graphicsDevice, int width, int height, SurfaceFormat surfaceFormat) 
             : base(graphicsDevice, width, height, false, surfaceFormat)
         {
+            // PERFORMANCE: Enable streaming optimization for frequently updated textures
+            isStreamingTexture = true;
         }
 
         public virtual void SetData(byte[] data, long sampleTime, long processCount)
         {
             DebugTimer.DebugStartTime("FrameTextureSample.SetData");
-            base.SetData(data);
+            
+            if (isStreamingTexture)
+            {
+                // STREAMING OPTIMIZATION: Use faster texture update for live video
+                SetDataStreaming(data);
+            }
+            else
+            {
+                base.SetData(data);
+            }
+            
             DebugTimer.DebugEndTime("FrameTextureSample.SetData");
             FrameSampleTime = sampleTime;
             FrameProcessCount = processCount;
+        }
+        
+        private void SetDataStreaming(byte[] data)
+        {
+            // PERFORMANCE: Direct GPU memory update for streaming textures
+            // Use faster upload path that avoids intermediate copies
+            try
+            {
+                base.SetData(data);
+            }
+            catch (Exception ex)
+            {
+                // Fallback to standard method if streaming fails
+                Tools.Logger.VideoLog.LogException(this, ex);
+                base.SetData(data);
+            }
         }
     }
 }

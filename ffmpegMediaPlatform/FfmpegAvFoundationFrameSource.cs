@@ -132,13 +132,13 @@ namespace FfmpegMediaPlatform
             }
             else
             {
-                // Live mode: Use dual stream approach like recording mode but only output RGBA pipe
-                // PERFORMANCE: Enhanced low-delay flags for 4K video to reduce 1-second startup delay
+                // Live mode: Ultra-low latency for drone racing - preserve camera timing but reduce jitter
+                // PERFORMANCE: Minimal buffering with enhanced low-delay flags for real-time display
                 ffmpegArgs = $"-f avfoundation " +
                                 $"-pixel_format uyvy422 " +
                                 $"-video_size {VideoConfig.VideoMode.Width}x{VideoConfig.VideoMode.Height} " +
                                 $"-i \"{name}\" " +
-                                $"-fflags nobuffer+fastseek+flush_packets " +
+                                $"-fflags nobuffer+flush_packets " +
                                 $"-flags low_delay " +
                                 $"-avioflags direct " +
                                 $"-flush_packets 1 " +
@@ -147,8 +147,8 @@ namespace FfmpegMediaPlatform
                                 $"-threads 1 " +
                                 $"-fps_mode passthrough " +
                                 $"-copyts " +
-                                $"-probesize 32 " +
-                                $"-analyzeduration 0 " +
+                                $"-probesize 64 " +
+                                $"-analyzeduration 1 " +
                                 $"-an " +
                                 $"-filter_complex \"split=2[out1][out2];[out1]format=rgba[outpipe];[out2]null[outnull]\" " +
                                 $"-map \"[outpipe]\" -f rawvideo pipe:1";

@@ -703,13 +703,15 @@ namespace FfmpegMediaPlatform
                 ffmpeg.av_dict_set(&options, "framerate", frameRateStr, 0);
             }
             
-            // AVFoundation-specific options for better camera initialization
-            ffmpeg.av_dict_set(&options, "probesize", "10000000", 0); // Increase probe size significantly
-            ffmpeg.av_dict_set(&options, "analyzeduration", "5000000", 0); // 5 seconds to analyze stream
+            // AVFoundation-specific options optimized for drone racing real-time performance
+            ffmpeg.av_dict_set(&options, "probesize", "1000000", 0); // Smaller probe for faster startup
+            ffmpeg.av_dict_set(&options, "analyzeduration", "1000000", 0); // 1 second analysis for faster init
             
-            // Real-time capture flags (but with better initialization)
-            ffmpeg.av_dict_set(&options, "fflags", "nobuffer", 0);
+            // Ultra low-delay flags for drone racing
+            ffmpeg.av_dict_set(&options, "fflags", "nobuffer+flush_packets", 0);
             ffmpeg.av_dict_set(&options, "flags", "low_delay", 0);
+            ffmpeg.av_dict_set(&options, "flush_packets", "1", 0);
+            ffmpeg.av_dict_set(&options, "max_delay", "0", 0);
 
             Tools.Logger.VideoLog.LogCall(this, $"Opening input with options: video_size={videoSize}, pixel_format={pixelFormat}");
 
@@ -841,22 +843,36 @@ namespace FfmpegMediaPlatform
                         }
                         else if (readResult == ffmpeg.AVERROR(ffmpeg.EAGAIN))
                         {
-                            // For camera initialization, frames may not be available immediately
+                            // For drone racing, minimize delay when frames aren't immediately available
                             retryCount++;
-                            if (retryCount % 20 == 0) // Log every 20 attempts to reduce noise
+                            
+                            // During initial startup, allow longer delays
+                            if (retryCount < 100)
                             {
-                                Tools.Logger.VideoLog.LogCall(this, $"Camera warming up... (attempt {retryCount})");
+                                if (retryCount % 30 == 0) // Log every 30 attempts to reduce noise
+                                {
+                                    Tools.Logger.VideoLog.LogCall(this, $"Camera initializing... (attempt {retryCount})");
+                                }
+                                Thread.Sleep(10); // Shorter sleep during startup
+                            }
+                            else
+                            {
+                                // After startup, use minimal delay for smooth real-time performance
+                                if (retryCount % 300 == 0) // Log every 300 attempts to reduce spam
+                                {
+                                    Tools.Logger.VideoLog.LogCall(this, $"Camera frame not ready (attempt {retryCount}) - using minimal delay for real-time performance");
+                                }
+                                Thread.Sleep(1); // Ultra-minimal delay for drone racing
                             }
                             
-                            // Give up after 5 minutes (6000 attempts * 50ms = 5 minutes)
-                            if (retryCount > 6000)
+                            // Give up after 5 minutes but with faster attempts
+                            if (retryCount > 30000) // 30000 * 1ms = 30 seconds max
                             {
-                                Tools.Logger.VideoLog.LogCall(this, "Camera failed to provide frames after 5 minutes - giving up");
+                                Tools.Logger.VideoLog.LogCall(this, "Camera failed to provide frames after extended period - giving up");
                                 Connected = false;
                                 break;
                             }
                             
-                            Thread.Sleep(50);
                             continue;
                         }
                         else
@@ -873,10 +889,14 @@ namespace FfmpegMediaPlatform
                         continue;
                     }
                     
-                    // Log successful frame reception if we were retrying
+                    // Log successful frame reception if we were retrying (reduced logging for performance)
                     if (retryCount > 0)
                     {
-                        Tools.Logger.VideoLog.LogCall(this, $"✓ Camera frame received after {retryCount} retries!");
+                        // Only log every 100 successful recoveries to reduce log spam
+                        if (retryCount > 10)
+                        {
+                            Tools.Logger.VideoLog.LogCall(this, $"✓ Camera frame received after {retryCount} retries!");
+                        }
                         retryCount = 0; // Reset retry count
                     }
 

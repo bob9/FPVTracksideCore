@@ -233,12 +233,18 @@ namespace FfmpegMediaPlatform
             {
                 string recordingPath = Path.GetFullPath(recordingFilename);
                 
+                // For recording: split stream - direct RGBA for display, processed for recording
+                string flipMirrorFilter = GetFlipMirrorFilter();
+                string recordingFilterChain = string.IsNullOrEmpty(flipMirrorFilter) 
+                    ? "split=2[out1][out2];[out1]copy[outpipe];[out2]format=yuv420p[outfile]"
+                    : $"split=2[out1][out2];[out1]copy[outpipe];[out2]{flipMirrorFilter},format=yuv420p[outfile]";
+                
                 // Use hardware-accelerated H.264 encoding for Windows (try NVENC first, fallback to software)
                 ffmpegArgs = $"-f dshow " +
                                 $"-rtbufsize 2048M " +
+                                $"-pixel_format rgba " +
                                 $"-framerate {VideoConfig.VideoMode.FrameRate} " +
                                 $"-video_size {VideoConfig.VideoMode.Width}x{VideoConfig.VideoMode.Height} " +
-                                $"{inputFormatArgs}" +
                                 $"-i video=\"{name}\" " +
                                 $"-fflags nobuffer " +
                                 $"-flags low_delay " +
@@ -247,11 +253,11 @@ namespace FfmpegMediaPlatform
                                 $"-fps_mode passthrough " +
                                 $"-copyts " +
                                 $"-an " +
-                                $"-filter_complex \"split=2[out1][out2];[out1]format=rgba[outpipe];[out2]format=yuv420p[outfile]\" " +
-                                $"-map \"[outpipe]\" -f rawvideo pipe:1 " +
+                                $"-filter_complex \"{recordingFilterChain}\" " +
+                                $"-map \"[outpipe]\" -f rawvideo -pix_fmt rgba pipe:1 " +
                                 $"-map \"[outfile]\" -c:v h264_nvenc -preset llhp -tune zerolatency -b:v 5M -f matroska -avoid_negative_ts make_zero \"{recordingPath}\"";
                 
-                Tools.Logger.VideoLog.LogCall(this, $"FFMPEG Windows Recording Mode ({format}): {ffmpegArgs}");
+                Tools.Logger.VideoLog.LogCall(this, $"FFMPEG Windows Recording Mode (direct RGBA) ({format}): {ffmpegArgs}");
             }
             else
             {
@@ -268,13 +274,13 @@ namespace FfmpegMediaPlatform
                     Tools.Logger.VideoLog.LogCall(this, $"FFMPEG Hardware decode acceleration skipped for uncompressed format: {VideoConfig.VideoMode?.Format}");
                 }
                 
+                // Live mode: Direct RGBA output, no processing needed since frames are already correct
                 // PERFORMANCE: Enhanced low-delay flags for 4K video to reduce 1-second startup delay
                 ffmpegArgs = $"-f dshow " +
                                 $"{hwaccelArgs}" +
+                                $"-pixel_format rgba " +
                                 $"-framerate {VideoConfig.VideoMode.FrameRate} " +
                                 $"-video_size {VideoConfig.VideoMode.Width}x{VideoConfig.VideoMode.Height} " +
-                                $"{inputFormatArgs}" +
-                                $"-rtbufsize 2M " +
                                 $"-i video=\"{name}\" " +
                                 $"-fflags nobuffer+fastseek+flush_packets " +
                                 $"-flags low_delay " +
@@ -288,12 +294,27 @@ namespace FfmpegMediaPlatform
                                 $"-probesize 32 " +
                                 $"-analyzeduration 0 " +
                                 $"-an " +
-                                $"-filter_complex \"split=2[out1][out2];[out1]format=rgba[outpipe];[out2]null[outnull]\" " +
-                                $"-map \"[outpipe]\" -f rawvideo pipe:1";
+                                $"-f rawvideo -pix_fmt rgba pipe:1";
                 
-                Tools.Logger.VideoLog.LogCall(this, $"FFMPEG Windows Live Mode ({format}) HW Accel: {VideoConfig.HardwareDecodeAcceleration}: {ffmpegArgs}");
+                Tools.Logger.VideoLog.LogCall(this, $"FFMPEG Windows Live Mode (direct RGBA) ({format}) HW Accel: {VideoConfig.HardwareDecodeAcceleration}: {ffmpegArgs}");
             }
             return ffmpegMediaFramework.GetProcessStartInfo(ffmpegArgs);
+        }
+        
+        private string GetFlipMirrorFilter()
+        {
+            var filters = new List<string>();
+            
+            bool flipped = VideoConfig.Flipped;
+            bool mirrored = VideoConfig.Mirrored;
+            
+            if (flipped)
+                filters.Add("vflip");
+                
+            if (mirrored)
+                filters.Add("hflip");
+                
+            return filters.Count > 0 ? string.Join(",", filters) : "";
         }
     }
 }

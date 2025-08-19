@@ -265,7 +265,7 @@ namespace UI.Video
             sourceBounds.Width = (int)(texture2d.Width * RelativeSourceBounds.Width);
             sourceBounds.Height = (int)(texture2d.Height * RelativeSourceBounds.Height);
 
-            sourceBounds = Flip(sourceBounds);
+            // No flip/mirror processing - handled in ffmpeg
 
             try
             {

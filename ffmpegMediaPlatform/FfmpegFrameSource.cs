@@ -72,13 +72,12 @@ namespace FfmpegMediaPlatform
         private float measuredFrameRate = 0f;
         private bool frameRateMeasured = false;
         
-        // REAL-TIME: Smart frame dropping for immediate responsiveness
-        // This solves the "1-second delay when moving hand in front of camera" problem by:
-        // 1. Dropping first 15 frames on startup to reach real-time quickly 
-        // 2. Dynamically dropping frames when display processing falls behind
-        // 3. NEVER dropping recording frames - only display frames are dropped
-        private const int STARTUP_FRAMES_TO_DROP = 15; // Skip first 15 frames to get to real-time quickly
-        private const double MAX_DISPLAY_LATENCY_MS = 500; // Drop frames if more than 500ms behind
+        // FRAME DROPPING DISABLED: No frames are dropped to prevent frame loss
+        // Frame dropping has been disabled to ensure all frames are processed and displayed
+        // when the system falls behind, rather than skipping frames.
+        // Timing constants kept for monitoring purposes only.
+        private const int STARTUP_FRAMES_TO_DROP = 15; // (UNUSED) Previously used for startup frame dropping
+        private const double MAX_DISPLAY_LATENCY_MS = 500; // (UNUSED) Previously used for latency-based dropping
         private readonly Queue<DateTime> displayFrameTimestamps = new Queue<DateTime>();
         private int framesDroppedForRealtime = 0;
         
@@ -1018,18 +1017,15 @@ namespace FfmpegMediaPlatform
 
         /// <summary>
         /// REAL-TIME: Check if we should drop this frame for real-time responsiveness
+        /// DISABLED: Frame dropping has been disabled to ensure no frames are lost
         /// </summary>
         private bool ShouldDropFrameForRealTime()
         {
-            // STARTUP FRAME DROPPING: Skip initial frames to get to real-time quickly
-            if (FrameProcessNumber <= STARTUP_FRAMES_TO_DROP)
-            {
-                framesDroppedForRealtime++;
-                Tools.Logger.VideoLog.LogCall(this, $"REAL-TIME: Dropping startup frame {FrameProcessNumber}/{STARTUP_FRAMES_TO_DROP} to reach real-time faster");
-                return true;
-            }
+            // FRAME DROPPING DISABLED: Always process all frames, never drop any
+            // This ensures every frame from the camera is displayed, preventing frame loss
+            // when the system falls behind.
             
-            // DYNAMIC FRAME DROPPING: Check if we're falling behind real-time
+            // Still track timing for statistics, but don't use it for dropping decisions
             DateTime now = DateTime.UtcNow;
             displayFrameTimestamps.Enqueue(now);
             
@@ -1037,28 +1033,15 @@ namespace FfmpegMediaPlatform
             while (displayFrameTimestamps.Count > 5)
                 displayFrameTimestamps.Dequeue();
             
-            // If we have enough samples, check if we're lagging behind
-            if (displayFrameTimestamps.Count >= 5)
+            // Log latency periodically for monitoring, but don't drop frames
+            if (displayFrameTimestamps.Count >= 5 && FrameProcessNumber % 300 == 0)
             {
                 var oldestFrameTime = displayFrameTimestamps.Peek();
                 var currentLatency = (now - oldestFrameTime).TotalMilliseconds;
-                
-                // If display latency exceeds threshold, drop this frame to catch up
-                if (currentLatency > MAX_DISPLAY_LATENCY_MS)
-                {
-                    framesDroppedForRealtime++;
-                    
-                    // Log every 30 dropped frames to avoid spam
-                    if (framesDroppedForRealtime % 30 == 0)
-                    {
-                        Tools.Logger.VideoLog.LogCall(this, $"REAL-TIME: Display latency {currentLatency:F0}ms > {MAX_DISPLAY_LATENCY_MS}ms, dropping frame {FrameProcessNumber} (total dropped: {framesDroppedForRealtime})");
-                    }
-                    
-                    return true;
-                }
+                Tools.Logger.VideoLog.LogCall(this, $"Frame processing latency: {currentLatency:F0}ms (frame {FrameProcessNumber}) - NO DROPPING");
             }
             
-            return false; // Don't drop this frame
+            return false; // NEVER drop frames
         }
 
         /// <summary>

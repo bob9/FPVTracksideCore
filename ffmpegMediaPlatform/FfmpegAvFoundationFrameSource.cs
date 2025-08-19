@@ -112,9 +112,15 @@ namespace FfmpegMediaPlatform
             {
                 string recordingPath = Path.GetFullPath(recordingFilename);
                 
-                // Use hardware-accelerated H.264 encoding for recording - let camera use its natural framerate
+                // For recording: split stream - direct RGBA for display, processed for recording
+                string flipMirrorFilter = GetFlipMirrorFilter();
+                string recordingFilterChain = string.IsNullOrEmpty(flipMirrorFilter) 
+                    ? "split=2[out1][out2];[out1]copy[outpipe];[out2]format=yuv420p[outfile]"
+                    : $"split=2[out1][out2];[out1]copy[outpipe];[out2]{flipMirrorFilter},format=yuv420p[outfile]";
+                
+                // Use hardware-accelerated H.264 encoding for recording - let camera use its natural framerate  
                 ffmpegArgs = $"-f avfoundation " +
-                                $"-pixel_format uyvy422 " +
+                                $"-pixel_format rgba " +
                                 $"-video_size {VideoConfig.VideoMode.Width}x{VideoConfig.VideoMode.Height} " +
                                 $"-i \"{name}\" " +
                                 $"-fflags nobuffer " +
@@ -124,18 +130,18 @@ namespace FfmpegMediaPlatform
                                 $"-fps_mode passthrough " +
                                 $"-copyts " +
                                 $"-an " +
-                                $"-filter_complex \"split=2[out1][out2];[out1]format=rgba[outpipe];[out2]format=yuv420p[outfile]\" " +
-                                $"-map \"[outpipe]\" -f rawvideo pipe:1 " +
+                                $"-filter_complex \"{recordingFilterChain}\" " +
+                                $"-map \"[outpipe]\" -f rawvideo -pix_fmt rgba pipe:1 " +
                                 $"-map \"[outfile]\" -c:v h264_videotoolbox -preset ultrafast -tune zerolatency -b:v 5M -f matroska -avoid_negative_ts make_zero \"{recordingPath}\"";
                 
-                Tools.Logger.VideoLog.LogCall(this, $"FFMPEG macOS Recording Mode: {ffmpegArgs}");
+                Tools.Logger.VideoLog.LogCall(this, $"FFMPEG macOS Recording Mode (direct RGBA): {ffmpegArgs}");
             }
             else
             {
-                // Live mode: Use dual stream approach like recording mode but only output RGBA pipe
+                // Live mode: Direct RGBA output, no processing needed since frames are already correct
                 // PERFORMANCE: Enhanced low-delay flags for 4K video to reduce 1-second startup delay
                 ffmpegArgs = $"-f avfoundation " +
-                                $"-pixel_format uyvy422 " +
+                                $"-pixel_format rgba " +
                                 $"-video_size {VideoConfig.VideoMode.Width}x{VideoConfig.VideoMode.Height} " +
                                 $"-i \"{name}\" " +
                                 $"-fflags nobuffer+fastseek+flush_packets " +
@@ -150,12 +156,27 @@ namespace FfmpegMediaPlatform
                                 $"-probesize 32 " +
                                 $"-analyzeduration 0 " +
                                 $"-an " +
-                                $"-filter_complex \"split=2[out1][out2];[out1]format=rgba[outpipe];[out2]null[outnull]\" " +
-                                $"-map \"[outpipe]\" -f rawvideo pipe:1";
+                                $"-f rawvideo -pix_fmt rgba pipe:1";
                 
-                Tools.Logger.VideoLog.LogCall(this, $"FFMPEG macOS Live Mode (dual stream): {ffmpegArgs}");
+                Tools.Logger.VideoLog.LogCall(this, $"FFMPEG macOS Live Mode (direct RGBA): {ffmpegArgs}");
             }
             return ffmpegMediaFramework.GetProcessStartInfo(ffmpegArgs);
+        }
+        
+        private string GetFlipMirrorFilter()
+        {
+            var filters = new List<string>();
+            
+            bool flipped = VideoConfig.Flipped;
+            bool mirrored = VideoConfig.Mirrored;
+            
+            if (flipped)
+                filters.Add("vflip");
+                
+            if (mirrored)
+                filters.Add("hflip");
+                
+            return filters.Count > 0 ? string.Join(",", filters) : "";
         }
     }
 }

@@ -178,8 +178,9 @@ namespace FfmpegMediaPlatform
             // Build FFmpeg command for video file playback with interactive seeking support
             // Use proper settings for smooth video file playback
             
-            // Build video filter chain based on playback speed
-            string videoFilter = "vflip"; // Base filter to flip video vertically
+            // Build video filter chain with flip/mirror
+            string flipMirrorFilter = GetFlipMirrorFilter();
+            string videoFilter = string.IsNullOrEmpty(flipMirrorFilter) ? "null" : flipMirrorFilter;
             string reFlag = "-re"; // Default: use -re for proper timing
             
             string ffmpegArgs = $"{(string.IsNullOrEmpty(reFlag) ? "" : reFlag + " ")}" +  // Read input at native frame rate (only for normal speed)
@@ -188,7 +189,7 @@ namespace FfmpegMediaPlatform
                                $"-avoid_negative_ts make_zero " +  // Handle negative timestamps
                                $"-threads 1 " +
                                $"-an " +  // No audio
-                               $"-vf \"{videoFilter}\" " +  // Apply video filters (vflip)
+                               $"-vf \"{videoFilter}\" " +  // Apply video filters
                                $"-pix_fmt rgba " +
                                $"-f rawvideo pipe:1";
 
@@ -1174,8 +1175,9 @@ namespace FfmpegMediaPlatform
                 // Put -ss BEFORE -i for efficient input seeking (avoids decoding unnecessary frames)
                 // Input options (-ss, -re) must come before -i, output options come after
                 
-                // Build video filter chain based on playback speed (same as GetProcessStartInfo)
-                string videoFilter = "vflip"; // Base filter to flip video vertically
+                // Build video filter chain with flip/mirror (same as GetProcessStartInfo)
+                string flipMirrorFilter = GetFlipMirrorFilter();
+                string videoFilter = string.IsNullOrEmpty(flipMirrorFilter) ? "null" : flipMirrorFilter;
                 string reFlag = "-re"; // Default: use -re for proper timing
                 
                 string ffmpegArgs = $"-ss {seekTime.TotalSeconds:F3} " +  // Seek to specific time (BEFORE input for fast seek)
@@ -1185,7 +1187,7 @@ namespace FfmpegMediaPlatform
                                    $"-avoid_negative_ts make_zero " +  // Handle negative timestamps (output option)
                                    $"-threads 1 " +  // Single thread (output option)
                                    $"-an " +  // No audio (output option)
-                                   $"-vf \"{videoFilter}\" " +  // Apply video filters (vflip)
+                                   $"-vf \"{videoFilter}\" " +  // Apply video filters
                                    $"-pix_fmt rgba " +  // RGBA pixel format (output option)
                                    $"-f rawvideo pipe:1";  // Raw video output to stdout (output option)
 
@@ -1632,6 +1634,23 @@ namespace FfmpegMediaPlatform
             {
                 Tools.Logger.VideoLog.LogException(this, ex);
             }
+        }
+        
+        private string GetFlipMirrorFilter()
+        {
+            var filters = new List<string>();
+            
+            bool flipped = VideoConfig.Flipped;
+            bool mirrored = VideoConfig.Mirrored;
+            
+            // For replay videos, apply flip/mirror settings from configuration
+            if (flipped)
+                filters.Add("vflip");
+                
+            if (mirrored)
+                filters.Add("hflip");
+                
+            return filters.Count > 0 ? string.Join(",", filters) : "";
         }
     }
 } 

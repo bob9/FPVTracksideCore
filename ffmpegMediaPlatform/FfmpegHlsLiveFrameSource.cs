@@ -347,6 +347,12 @@ namespace FfmpegMediaPlatform
                 float targetFrameRate = VideoConfig.VideoMode?.FrameRate ?? 30.0f;
                 int gop = Math.Max(1, (int)Math.Round(targetFrameRate * 0.1f)); // 0.1s GOP
                 
+                // HLS with recording: split stream - direct RGBA for display, processed for HLS
+                string flipMirrorFilter = GetFlipMirrorFilter();
+                string filterChain = string.IsNullOrEmpty(flipMirrorFilter) 
+                    ? "[0:v]split=2[out1][out2];[out1]copy[outpipe];[out2]format=yuv420p[outfile]"
+                    : $"[0:v]split=2[out1][out2];[out1]copy[outpipe];[out2]{flipMirrorFilter},format=yuv420p[outfile]";
+                
                 // No frame rate filtering needed - recording now handles 60fps correctly
                 string ffmpegArgs = $"{inputArgs} " +
                                    $"-fflags nobuffer " +
@@ -355,17 +361,17 @@ namespace FfmpegMediaPlatform
                                    $"-threads 1 " +
                                    $"-fps_mode passthrough " +  // Use camera's natural frame rate
                                    $"-an " +
-                                   $"-filter_complex \"[0:v]split=2[out1][out2];[out1]format=rgba[outpipe];[out2]format=yuv420p[outfile]\" " +
-                                   $"-map \"[outpipe]\" -f rawvideo pipe:1 " +  // RGBA output for live display
+                                   $"-filter_complex \"{filterChain}\" " +
+                                   $"-map \"[outpipe]\" -f rawvideo -pix_fmt rgba pipe:1 " +  // Direct RGBA output for live display
                                    $"-map \"[outfile]\" {encodingArgs} -g {gop} -keyint_min {gop} -force_key_frames \"expr:gte(t,n_forced*0.1)\" " +  // HLS output with tighter GOP
                                    $"-hls_time 0.5 -hls_list_size 3 -hls_flags delete_segments+independent_segments " +  // Ultra-low latency: 0.5s segments, only 3 segments
                                    $"-hls_segment_type mpegts " +  // Use MPEG-TS for better streaming
                                    $"-start_number 0 " +  // Start numbering from 0
                                    $"-f hls \"{hlsPath}\"";
                 
-                Tools.Logger.VideoLog.LogCall(this, $"LIVE STREAM DEBUG: Using passthrough mode, no frame filtering");
+                Tools.Logger.VideoLog.LogCall(this, $"LIVE STREAM DEBUG: Using direct RGBA passthrough, no display processing");
 
-                Tools.Logger.VideoLog.LogCall(this, $"Hardware Accelerated HLS FFmpeg Command:");
+                Tools.Logger.VideoLog.LogCall(this, $"Hardware Accelerated HLS FFmpeg Command (direct RGBA):");
                 Tools.Logger.VideoLog.LogCall(this, ffmpegArgs);
                 return ffmpegMediaFramework.GetProcessStartInfo(ffmpegArgs);
             }
@@ -376,6 +382,7 @@ namespace FfmpegMediaPlatform
                 Tools.Logger.VideoLog.LogCall(this, $"Input args: {inputArgs}");
                 Tools.Logger.VideoLog.LogCall(this, $"Video mode: {VideoConfig.VideoMode?.Width}x{VideoConfig.VideoMode?.Height}@{VideoConfig.VideoMode?.FrameRate}fps");
                 
+                // Direct RGBA output - no processing needed since frames are already correct
                 // Single output FFmpeg command - RGBA only
                 string ffmpegArgs = $"{inputArgs} " +
                                    $"-fflags nobuffer " +
@@ -384,11 +391,10 @@ namespace FfmpegMediaPlatform
                                    $"-threads 1 " +
                                    $"-fps_mode passthrough " +  // Use camera's natural frame rate
                                    $"-an " +
-                                   $"-f rawvideo " +
-                                   $"-pix_fmt rgba " +
-                                   $"pipe:1";  // RGBA output for live display only
+                                   $"-f rawvideo -pix_fmt rgba " +
+                                   $"pipe:1";  // Direct RGBA output for live display only
                 
-                Tools.Logger.VideoLog.LogCall(this, $"RGBA-Only FFmpeg Command (HLS Disabled) HW Accel: {VideoConfig.HardwareDecodeAcceleration}:");
+                Tools.Logger.VideoLog.LogCall(this, $"Direct RGBA-Only FFmpeg Command (HLS Disabled) HW Accel: {VideoConfig.HardwareDecodeAcceleration}:");
                 Tools.Logger.VideoLog.LogCall(this, ffmpegArgs);
                 return ffmpegMediaFramework.GetProcessStartInfo(ffmpegArgs);
             }
@@ -997,6 +1003,22 @@ namespace FfmpegMediaPlatform
             }
             
             base.Dispose();
+        }
+        
+        private string GetFlipMirrorFilter()
+        {
+            var filters = new List<string>();
+            
+            bool flipped = VideoConfig.Flipped;
+            bool mirrored = VideoConfig.Mirrored;
+            
+            if (flipped)
+                filters.Add("vflip");
+                
+            if (mirrored)
+                filters.Add("hflip");
+                
+            return filters.Count > 0 ? string.Join(",", filters) : "";
         }
     }
 }

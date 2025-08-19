@@ -790,15 +790,41 @@ namespace FfmpegMediaPlatform
                         // Convert to RGBA
                         ffmpeg.sws_scale(sws, srcData, srcLinesize, 0, codecCtx->height, tmpData, tmpLines);
                         
-                        // Copy row by row into our pinned rgbaBuffer (flip vertically to fix upside-down issue)
+                        // Apply flip/mirror based on VideoConfig settings
                         int stride = codecCtx->width * 4;
                         byte* srcPtr = tmpData[0];
                         byte* dstPtr = (byte*)rgbaPtr.ToPointer();
+                        
+                        bool shouldFlip = VideoConfig.Flipped;
+                        bool shouldMirror = VideoConfig.Mirrored;
+                        
                         for (int y = 0; y < codecCtx->height; y++)
                         {
-                            // Flip the image by copying from bottom to top
-                            int srcRow = codecCtx->height - 1 - y;
-                            Buffer.MemoryCopy(srcPtr + srcRow * tmpLines[0], dstPtr + y * stride, stride, stride);
+                            // Determine source row based on flip setting
+                            int srcRow = shouldFlip ? (codecCtx->height - 1 - y) : y;
+                            byte* srcRowPtr = srcPtr + srcRow * tmpLines[0];
+                            byte* dstRowPtr = dstPtr + y * stride;
+                            
+                            if (shouldMirror)
+                            {
+                                // Mirror horizontally by copying pixels in reverse order
+                                for (int x = 0; x < codecCtx->width; x++)
+                                {
+                                    int srcX = codecCtx->width - 1 - x;
+                                    byte* srcPixel = srcRowPtr + srcX * 4;
+                                    byte* dstPixel = dstRowPtr + x * 4;
+                                    
+                                    dstPixel[0] = srcPixel[0]; // R
+                                    dstPixel[1] = srcPixel[1]; // G
+                                    dstPixel[2] = srcPixel[2]; // B
+                                    dstPixel[3] = srcPixel[3]; // A
+                                }
+                            }
+                            else
+                            {
+                                // No mirroring - direct memory copy
+                                Buffer.MemoryCopy(srcRowPtr, dstRowPtr, stride, stride);
+                            }
                         }
                         
                         // push to RawTexture ring buffer

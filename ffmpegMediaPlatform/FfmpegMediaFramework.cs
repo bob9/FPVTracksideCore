@@ -233,101 +233,247 @@ namespace FfmpegMediaPlatform
             }
             else
             {
-                // Live camera capture via ffmpeg process with HLS composite
-                Tools.Logger.VideoLog.LogDebugCall(this, $"PLAYBACK PATH: Live capture via ffmpeg (HLS composite) → {vc.DeviceName}");
-                return new FfmpegHlsCompositeFrameSource(this, vc);
+                // Live camera capture using native FFmpeg 8.0 libraries (Homebrew)
+                // Using versioned .dylib files (libavcodec.62.dylib, etc.) as required by FFmpeg.AutoGen
+                bool useNativeCapture = true;
+
+                if (useNativeCapture)
+                {
+                    // Try native library first, fallback to HLS composite
+                    try
+                    {
+                        if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
+                        {
+                            Tools.Logger.VideoLog.LogDebugCall(this, $"CAPTURE PATH: Native ffmpeg lib (DirectShow) → {vc.DeviceName}");
+                            return new FfmpegLibDshowFrameSource(this, vc);
+                        }
+                        else if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX))
+                        {
+                            Tools.Logger.VideoLog.LogDebugCall(this, $"CAPTURE PATH: Native ffmpeg lib (AVFoundation) → {vc.DeviceName}");
+                            return new FfmpegLibAvFoundationFrameSource(this, vc);
+                        }
+                        else
+                        {
+                            // Unknown platform, fallback to HLS composite
+                            Tools.Logger.VideoLog.LogDebugCall(this, $"CAPTURE PATH FALLBACK: Live capture via ffmpeg (HLS composite) → {vc.DeviceName}");
+                            return new FfmpegHlsCompositeFrameSource(this, vc);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Tools.Logger.VideoLog.LogException(this, "Native library capture failed, falling back to HLS composite", ex);
+                        Tools.Logger.VideoLog.LogDebugCall(this, $"CAPTURE PATH FALLBACK: Live capture via ffmpeg (HLS composite) → {vc.DeviceName}");
+                        return new FfmpegHlsCompositeFrameSource(this, vc);
+                    }
+                }
+                else
+                {
+                    // Use process-based HLS composite (default for compatibility)
+                    Tools.Logger.VideoLog.LogDebugCall(this, $"CAPTURE PATH: Live capture via ffmpeg (HLS composite) → {vc.DeviceName}");
+                    return new FfmpegHlsCompositeFrameSource(this, vc);
+                }
             }
         }
 
         public IEnumerable<VideoConfig> GetVideoConfigs()
         {
+            // Try using native library for device enumeration first, fallback to binary
             if (dshow)
             {
-                string listDevicesCommand = "-list_devices true -f dshow -i dummy";
-                Tools.Logger.VideoLog.LogDebugCall(this, $"FFMPEG COMMAND (list cameras): ffmpeg {listDevicesCommand}");
-
-                IEnumerable<string> responseText = GetFfmpegText(listDevicesCommand);
-               
-                string[] deviceList = responseText.Where(l => l.Contains("[dshow @") && l.Contains("(video)")).ToArray();
-                string[] alternativeNames = responseText.Where(l => l.Contains("[dshow @") && l.Contains("Alternative name")).ToArray();
-                for (int i = 0; i < deviceList.Length && i < alternativeNames.Length; i++)
+                // For Windows DirectShow, try native enumeration first
+                var nativeDevices = TryGetDevicesNative("dshow").ToList();
+                if (nativeDevices.Any())
                 {
-                    string deviceLine = deviceList[i];
-                    string alternativeName = alternativeNames[i];
-
-                    Tools.Logger.VideoLog.LogDebugCall(this, $"FFMPEG OUTPUT: {deviceLine}");
-
-                    string[] splits = deviceLine.Split("\"");
-                    if (splits.Length != 3)
+                    Tools.Logger.VideoLog.LogDebugCall(this, $"Using native library for DirectShow device enumeration: {nativeDevices.Count} devices found");
+                    foreach (var device in nativeDevices)
                     {
-                        continue;
+                        yield return device;
                     }
+                }
+                else
+                {
+                    // Fallback to binary method
+                    Tools.Logger.VideoLog.LogDebugCall(this, "Falling back to FFmpeg binary for DirectShow device enumeration");
+                    string listDevicesCommand = "-list_devices true -f dshow -i dummy";
+                    Tools.Logger.VideoLog.LogDebugCall(this, $"FFMPEG COMMAND (list cameras): ffmpeg {listDevicesCommand}");
 
-                    string dshowPath = "";
-                    if (!string.IsNullOrEmpty(alternativeName))
+                    IEnumerable<string> responseText = GetFfmpegText(listDevicesCommand);
+
+                    string[] deviceList = responseText.Where(l => l.Contains("[dshow @") && l.Contains("(video)")).ToArray();
+                    string[] alternativeNames = responseText.Where(l => l.Contains("[dshow @") && l.Contains("Alternative name")).ToArray();
+                    for (int i = 0; i < deviceList.Length && i < alternativeNames.Length; i++)
                     {
-                        Match m = System.Text.RegularExpressions.Regex.Match(alternativeName, "\"(.*)\"");
-                        if (m.Success)
+                        string deviceLine = deviceList[i];
+                        string alternativeName = alternativeNames[i];
+
+                        Tools.Logger.VideoLog.LogDebugCall(this, $"FFMPEG OUTPUT: {deviceLine}");
+
+                        string[] splits = deviceLine.Split("\"");
+                        if (splits.Length != 3)
                         {
-                            dshowPath = m.Groups[1].Value;
+                            continue;
                         }
+
+                        string dshowPath = "";
+                        if (!string.IsNullOrEmpty(alternativeName))
+                        {
+                            Match m = System.Text.RegularExpressions.Regex.Match(alternativeName, "\"(.*)\"");
+                            if (m.Success)
+                            {
+                                dshowPath = m.Groups[1].Value;
+                            }
+                        }
+                        string name = splits[1];
+                        yield return new VideoConfig { FrameWork = FrameWork.FFmpeg, DeviceName = name, ffmpegId = dshowPath };
                     }
-                    string name = splits[1];
-                    yield return new VideoConfig { FrameWork = FrameWork.FFmpeg, DeviceName = name, ffmpegId = dshowPath };
                 }
             }
 
             if (avfoundation)
             {
-                string listDevicesCommand = "-list_devices true -f avfoundation -i dummy";
-                Tools.Logger.VideoLog.LogDebugCall(this, $"FFMPEG COMMAND (list cameras): ffmpeg {listDevicesCommand}");
-                
-                IEnumerable<string> deviceList = GetFfmpegText(listDevicesCommand, l => l.Contains("AVFoundation"));
-
-                bool inVideo = false;
-
-                foreach (string deviceLine in deviceList)
+                // For macOS AVFoundation, try native enumeration first
+                var nativeDevices = TryGetDevicesNative("avfoundation").ToList();
+                if (nativeDevices.Any())
                 {
-                    Tools.Logger.VideoLog.LogDebugCall(this, $"FFMPEG OUTPUT: {deviceLine}");
-                    
-                    if (deviceLine.Contains("video devices:"))
+                    Tools.Logger.VideoLog.LogDebugCall(this, $"Using native library for AVFoundation device enumeration: {nativeDevices.Count} devices found");
+                    foreach (var device in nativeDevices)
                     {
-                        inVideo = true;
-                        continue;
-                    } 
-
-                    if (deviceLine.Contains("audio devices:"))
-                    {
-                        inVideo = false;
-                        continue;
+                        yield return device;
                     }
+                }
+                else
+                {
+                    // Fallback to binary method
+                    Tools.Logger.VideoLog.LogDebugCall(this, "Falling back to FFmpeg binary for AVFoundation device enumeration");
+                    string listDevicesCommand = "-list_devices true -f avfoundation -i dummy";
+                    Tools.Logger.VideoLog.LogDebugCall(this, $"FFMPEG COMMAND (list cameras): ffmpeg {listDevicesCommand}");
 
-                    if (inVideo)
+                    IEnumerable<string> deviceList = GetFfmpegText(listDevicesCommand, l => l.Contains("AVFoundation"));
+
+                    bool inVideo = false;
+
+                    foreach (string deviceLine in deviceList)
                     {
-                        Regex reg = new Regex("\\[AVFoundation[^\\]]*\\] \\[(\\d+)\\] (.+)");
+                        Tools.Logger.VideoLog.LogDebugCall(this, $"FFMPEG OUTPUT: {deviceLine}");
 
-                        Match match = reg.Match(deviceLine);
-                        if (match.Success)
+                        if (deviceLine.Contains("video devices:"))
                         {
-                            string deviceIndex = match.Groups[1].Value;
-                            string rawName = match.Groups[2].Value;
-                            // Remove trailing VID/PID if present (for mac cameras only)
-                            // IMPORTANT: Don't trim the name - FFmpeg expects the exact name including any trailing/leading spaces
-                            string cleanedName = System.Text.RegularExpressions.Regex.Replace(rawName, @"\s*VID:[0-9A-Fa-f]+\s*PID:[0-9A-Fa-f]+", "");
-                            Tools.Logger.VideoLog.LogDebugCall(this, $"FFMPEG ✓ FOUND CAMERA: '{cleanedName}' (length: {cleanedName.Length})");
-                            // For AVFoundation, use cleaned device name for FFmpeg (without VID:PID)
-                            // On Mac, cameras are upside down by default, but we want UI to show "None"
-                            yield return new VideoConfig {
-                                FrameWork = FrameWork.FFmpeg,
-                                DeviceName = cleanedName,
-                                ffmpegId = cleanedName,
-                                FlipMirrored = FlipMirroreds.None  // UI shows "None" but flip logic handles Mac cameras
-                            };
+                            inVideo = true;
+                            continue;
+                        }
+
+                        if (deviceLine.Contains("audio devices:"))
+                        {
+                            inVideo = false;
+                            continue;
+                        }
+
+                        if (inVideo)
+                        {
+                            Regex reg = new Regex("\\[AVFoundation[^\\]]*\\] \\[(\\d+)\\] (.+)");
+
+                            Match match = reg.Match(deviceLine);
+                            if (match.Success)
+                            {
+                                string deviceIndex = match.Groups[1].Value;
+                                string rawName = match.Groups[2].Value;
+                                // Remove trailing VID/PID if present (for mac cameras only)
+                                // IMPORTANT: Don't trim the name - FFmpeg expects the exact name including any trailing/leading spaces
+                                string cleanedName = System.Text.RegularExpressions.Regex.Replace(rawName, @"\s*VID:[0-9A-Fa-f]+\s*PID:[0-9A-Fa-f]+", "");
+                                Tools.Logger.VideoLog.LogDebugCall(this, $"FFMPEG ✓ FOUND CAMERA: '{cleanedName}' (length: {cleanedName.Length})");
+                                // For AVFoundation, use cleaned device name for FFmpeg (without VID:PID)
+                                // On Mac, cameras are upside down by default, but we want UI to show "None"
+                                yield return new VideoConfig {
+                                    FrameWork = FrameWork.FFmpeg,
+                                    DeviceName = cleanedName,
+                                    ffmpegId = cleanedName,
+                                    FlipMirrored = FlipMirroreds.None  // UI shows "None" but flip logic handles Mac cameras
+                                };
+                            }
                         }
                     }
                 }
             }
+        }
 
+        /// <summary>
+        /// Try to enumerate devices using native FFmpeg library
+        /// Returns empty list if native enumeration fails
+        /// </summary>
+        private unsafe IEnumerable<VideoConfig> TryGetDevicesNative(string formatName)
+        {
+            List<VideoConfig> devices = new List<VideoConfig>();
+
+            try
+            {
+                FfmpegNativeLoader.EnsureRegistered();
+
+                // Find input format
+                FFmpeg.AutoGen.AVInputFormat* inputFormat = FFmpeg.AutoGen.ffmpeg.av_find_input_format(formatName);
+                if (inputFormat == null)
+                {
+                    Tools.Logger.VideoLog.LogDebugCall(this, $"Native enumeration: Could not find input format: {formatName}");
+                    return devices;
+                }
+
+                // Allocate device list
+                FFmpeg.AutoGen.AVDeviceInfoList* deviceList = null;
+                FFmpeg.AutoGen.AVFormatContext* formatContext = FFmpeg.AutoGen.ffmpeg.avformat_alloc_context();
+
+                if (formatContext == null)
+                {
+                    Tools.Logger.VideoLog.LogDebugCall(this, "Native enumeration: Failed to allocate format context");
+                    return devices;
+                }
+
+                // Enumerate devices
+                int ret = FFmpeg.AutoGen.ffmpeg.avdevice_list_input_sources(inputFormat, null, null, &deviceList);
+
+                if (ret < 0 || deviceList == null)
+                {
+                    Tools.Logger.VideoLog.LogDebugCall(this, $"Native enumeration: Failed to list devices: {ret}");
+                    FFmpeg.AutoGen.ffmpeg.avformat_free_context(formatContext);
+                    return devices;
+                }
+
+                // Process device list
+                for (int i = 0; i < deviceList->nb_devices; i++)
+                {
+                    FFmpeg.AutoGen.AVDeviceInfo* device = deviceList->devices[i];
+                    if (device != null)
+                    {
+                        string deviceName = System.Runtime.InteropServices.Marshal.PtrToStringAnsi(new IntPtr(device->device_name));
+                        string deviceDescription = System.Runtime.InteropServices.Marshal.PtrToStringAnsi(new IntPtr(device->device_description));
+
+                        if (!string.IsNullOrEmpty(deviceName))
+                        {
+                            string displayName = !string.IsNullOrEmpty(deviceDescription) ? deviceDescription : deviceName;
+
+                            Tools.Logger.VideoLog.LogDebugCall(this, $"Native enumeration: Found device: {displayName} (ID: {deviceName})");
+
+                            devices.Add(new VideoConfig
+                            {
+                                FrameWork = FrameWork.FFmpeg,
+                                DeviceName = displayName,
+                                ffmpegId = deviceName,
+                                FlipMirrored = formatName == "avfoundation" ? FlipMirroreds.None : FlipMirroreds.None
+                            });
+                        }
+                    }
+                }
+
+                // Cleanup
+                FFmpeg.AutoGen.ffmpeg.avdevice_free_list_devices(&deviceList);
+                FFmpeg.AutoGen.ffmpeg.avformat_free_context(formatContext);
+
+                Tools.Logger.VideoLog.LogDebugCall(this, $"Native enumeration: Successfully found {devices.Count} devices");
+            }
+            catch (Exception ex)
+            {
+                Tools.Logger.VideoLog.LogException(this, "Native device enumeration failed", ex);
+            }
+
+            return devices;
         }
 
         public string GetValue(string source, string name)

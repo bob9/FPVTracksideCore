@@ -83,7 +83,7 @@ namespace FfmpegMediaPlatform
                 Tools.Logger.VideoLog.LogDebugStatic($"FfmpegNativeLoader.EnsureRegistered: Directory exists - Setting ffmpeg.RootPath to: {bundledPath}");
                 Tools.Logger.VideoLog.LogDebugStatic($"Current process architecture: {RuntimeInformation.ProcessArchitecture}");
                 Tools.Logger.VideoLog.LogDebugStatic($"Current OS architecture: {RuntimeInformation.OSArchitecture}");
-                
+
                 // List files in the directory for debugging
                 var files = Directory.GetFiles(bundledPath, "*.dylib");
                 Tools.Logger.VideoLog.LogDebugStatic($"Found {files.Length} dylib files in directory:");
@@ -91,9 +91,14 @@ namespace FfmpegMediaPlatform
                 {
                     Tools.Logger.VideoLog.LogDebugStatic($"  - {Path.GetFileName(file)}");
                 }
-                
+
+                // Set FFmpeg.AutoGen to use bundled libraries
                 ffmpeg.RootPath = bundledPath;
-                Tools.Logger.VideoLog.LogDebugStatic($"FFmpeg native libraries loaded from: {bundledPath}");
+                Tools.Logger.VideoLog.LogDebugStatic($"FFmpeg native libraries path set to: {bundledPath}");
+
+                // Set error handling for function resolution
+                DynamicallyLoadedBindings.ThrowErrorIfFunctionNotFound = true;
+                Tools.Logger.VideoLog.LogDebugStatic($"ThrowErrorIfFunctionNotFound = true");
 
                 // Check if essential libraries exist (platform-specific)
                 string[] requiredLibs;
@@ -197,25 +202,52 @@ namespace FfmpegMediaPlatform
                 // Force FFmpeg.AutoGen to initialize with the new path
                 try
                 {
-                    Tools.Logger.VideoLog.LogDebugStatic("Testing FFmpeg.AutoGen initialization...");
+                    Tools.Logger.VideoLog.LogDebugStatic("Testing FFmpeg.AutoGen 8.0 initialization...");
                     Tools.Logger.VideoLog.LogDebugStatic($"ffmpeg.RootPath is set to: {ffmpeg.RootPath}");
 
-                    ffmpeg.av_log_set_level(ffmpeg.AV_LOG_INFO);
+                    // Test each function individually to find which one fails
+                    try
+                    {
+                        Tools.Logger.VideoLog.LogDebugStatic("Testing av_version_info()...");
+                        var version = ffmpeg.av_version_info();
+                        Tools.Logger.VideoLog.LogDebugStatic($"✅ av_version_info() worked: {version}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Tools.Logger.VideoLog.LogException($"❌ av_version_info() failed", ex);
+                        throw;
+                    }
 
-                    // Call a simple FFmpeg function to trigger initialization
-                    var version = ffmpeg.av_version_info();
-                    Tools.Logger.VideoLog.LogDebugStatic($"FFmpeg version: {version}");
+                    try
+                    {
+                        Tools.Logger.VideoLog.LogDebugStatic("Testing avcodec_version()...");
+                        var codecVersion = ffmpeg.avcodec_version();
+                        Tools.Logger.VideoLog.LogDebugStatic($"✅ avcodec_version() worked: {codecVersion}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Tools.Logger.VideoLog.LogException($"❌ avcodec_version() failed", ex);
+                        throw;
+                    }
 
-                    // Test a few more functions to verify bindings
-                    var codecVersion = ffmpeg.avcodec_version();
-                    var formatVersion = ffmpeg.avformat_version();
-                    Tools.Logger.VideoLog.LogDebugStatic($"Codec version: {codecVersion}");
-                    Tools.Logger.VideoLog.LogDebugStatic($"Format version: {formatVersion}");
+                    try
+                    {
+                        Tools.Logger.VideoLog.LogDebugStatic("Testing avformat_version()...");
+                        var formatVersion = ffmpeg.avformat_version();
+                        Tools.Logger.VideoLog.LogDebugStatic($"✅ avformat_version() worked: {formatVersion}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Tools.Logger.VideoLog.LogException($"❌ avformat_version() failed", ex);
+                        throw;
+                    }
+
+                    Tools.Logger.VideoLog.LogDebugStatic("✅ FFmpeg 8.0 initialization successful!");
                 }
                 catch (Exception ex)
                 {
                     Tools.Logger.VideoLog.LogException($"FFmpeg initialization test failed", ex);
-                    throw new NotSupportedException($"FFmpeg initialization failed. The libraries may be incompatible or dependencies are missing: {ex.Message}", ex);
+                    throw new NotSupportedException($"FFmpeg 8.0 initialization failed: {ex.Message}", ex);
                 }
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))

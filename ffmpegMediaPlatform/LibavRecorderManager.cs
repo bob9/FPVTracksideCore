@@ -293,7 +293,7 @@ namespace FfmpegMediaPlatform
                 swsContext = ffmpeg.sws_getContext(
                     width, height, AVPixelFormat.AV_PIX_FMT_RGBA,
                     width, height, AVPixelFormat.AV_PIX_FMT_YUV420P,
-                    ffmpeg.SWS_BILINEAR, null, null, null);
+                    2, null, null, null); // SWS_BILINEAR = 2
 
                 if (swsContext == null)
                 {

@@ -56,11 +56,14 @@ namespace FfmpegMediaPlatform
                 {
                     FfmpegNativeLoader.EnsureRegistered();
                     _initialized = true;
+                    Tools.Logger.VideoLog.LogDebugStatic("FfmpegGlobalInitializer: FFmpeg bindings initialized successfully");
                 }
                 catch (Exception ex)
                 {
                     Tools.Logger.VideoLog.LogException($"FfmpegGlobalInitializer: Failed to initialize FFmpeg bindings", ex);
-                    throw;
+                    // Don't throw - allow app to continue without native library support
+                    // Process-based approach will be used instead
+                    Tools.Logger.VideoLog.LogDebugStatic("FfmpegGlobalInitializer: Continuing without native library support");
                 }
             }
         }

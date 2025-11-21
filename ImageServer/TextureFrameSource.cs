@@ -149,8 +149,9 @@ namespace ImageServer
                         ProcessImage();
                         Connected = true;
                     }
-                    catch 
+                    catch (Exception ex)
                     {
+                        Logger.VideoLog.LogException(this, ex);
                         Connected = false;
                     }
                 }

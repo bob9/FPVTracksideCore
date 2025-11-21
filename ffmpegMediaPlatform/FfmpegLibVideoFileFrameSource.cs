@@ -409,7 +409,7 @@ namespace FfmpegMediaPlatform
             if (sws != null) return;
             sws = ffmpeg.sws_getContext(codecCtx->width, codecCtx->height, codecCtx->pix_fmt,
                                         codecCtx->width, codecCtx->height, AVPixelFormat.AV_PIX_FMT_RGBA,
-                                        ffmpeg.SWS_BILINEAR, null, null, null);
+                                        2, null, null, null); // SWS_BILINEAR = 2
             if (sws == null) throw new Exception("sws_getContext failed");
         }
 

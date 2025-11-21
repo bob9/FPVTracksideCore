@@ -238,7 +238,7 @@ namespace FfmpegMediaPlatform
             width = VideoConfig.VideoMode?.Width ?? 640;
             height = VideoConfig.VideoMode?.Height ?? 480;
             buffer = new byte[width * height * 4];
-            rawTextures = new XBuffer<RawTexture>(5, width, height);
+            rawTextures = new XBuffer<RawTexture>(3, width, height);
 
             try
             {
@@ -255,9 +255,10 @@ namespace FfmpegMediaPlatform
                 // Start recording worker task for async frame processing
                 StartRecordingWorkerTask();
 
-                // Start capture thread
+                // Start capture thread with high priority for low latency
                 captureThread = new Thread(CaptureLoop);
                 captureThread.Name = "ffmpeglib - " + VideoConfig.DeviceName;
+                captureThread.Priority = ThreadPriority.AboveNormal;
                 captureThread.Start();
 
                 // PERFORMANCE: Start parallel frame processing task
@@ -429,7 +430,7 @@ namespace FfmpegMediaPlatform
                     return false;
                 }
 
-                rawTextures = new XBuffer<RawTexture>(5, width, height);
+                rawTextures = new XBuffer<RawTexture>(3, width, height);
                 inited = true;
 
                 Tools.Logger.VideoLog.LogCall(this, $"LibCapture initialized: {width}x{height}, codec: {ffmpeg.avcodec_get_name(videoStream->codecpar->codec_id)}");

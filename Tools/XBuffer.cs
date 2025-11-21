@@ -107,6 +107,51 @@ namespace Tools
             return false;
         }
 
+        /// <summary>
+        /// Reads the most recent frame, skipping any buffered frames to minimize latency
+        /// </summary>
+        public bool ReadLatest(out T t, int id)
+        {
+            if (id == lastID)
+            {
+                t = buffers[readIndex];
+                return true;
+            }
+
+            // Find the most recent written frame by searching backwards from writeIndex
+            int latestIndex = -1;
+            for (int i = 1; i <= buffers.Length; i++)
+            {
+                int index = (writeIndex - i + buffers.Length) % buffers.Length;
+                if (writtenNotRead[index])
+                {
+                    latestIndex = index;
+                    break;
+                }
+            }
+
+            if (latestIndex >= 0)
+            {
+                // Mark all older frames as read to skip them
+                for (int i = 0; i < buffers.Length; i++)
+                {
+                    if (i != latestIndex && writtenNotRead[i])
+                    {
+                        writtenNotRead[i] = false;
+                    }
+                }
+
+                readIndex = latestIndex;
+                t = buffers[latestIndex];
+                writtenNotRead[latestIndex] = false;
+                lastID = id;
+                return true;
+            }
+
+            t = default(T);
+            return false;
+        }
+
         public void Debug()
         {
             Console.WriteLine("Read " + readIndex + " Write " + writeIndex + " b " + string.Join(", ", writtenNotRead.Select(r => r ? "1" : "0")));

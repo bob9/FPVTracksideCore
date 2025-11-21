@@ -201,8 +201,8 @@ namespace ImageServer
             RawTexture frame;
 
             bool result = false;
-            // Maybe update the texture
-            if (rawTextures.ReadOne(out frame, drawFrameCount))
+            // Maybe update the texture - use ReadLatest for minimal latency
+            if (rawTextures.ReadLatest(out frame, drawFrameCount))
             {
                 DebugTimer.DebugStartTime("UpdateTexture");
 

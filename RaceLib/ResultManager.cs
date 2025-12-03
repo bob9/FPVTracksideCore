@@ -273,7 +273,7 @@ namespace RaceLib
 
             bool rollover = RollOver(endRound);
 
-            return GetResults(races, pilot, rollover);
+            return GetCreateResults(races, pilot, rollover);
         }
 
         public Round GetRollOverRound(Round roundInFinal)
@@ -302,7 +302,7 @@ namespace RaceLib
             return null;
         }
 
-        public IEnumerable<Result> GetResults(IEnumerable<Race> races, Pilot pilot, bool roundPositionRollover, bool recalculate = false)
+        public IEnumerable<Result> GetCreateResults(IEnumerable<Race> races, Pilot pilot, bool roundPositionRollover, bool recalculate = false)
         {
             List<Result> results;
             lock (Results)
@@ -314,26 +314,6 @@ namespace RaceLib
             if (roundPositionRollover && anyFinals)
             {
                 Round rolloverRound = GetRollOverRound(races.Select(r => r.Round).FirstOrDefault());
-                if (rolloverRound != null)
-                {
-                    Result rollOver = GetRollOver(pilot, rolloverRound, recalculate);
-                    if (rollOver != null)
-                    {
-                        results.Insert(0, rollOver);
-                    }
-                }
-            }
-
-            return results;
-        }
-
-        public IEnumerable<Result> GetResults(Round endRound, Pilot pilot, bool roundPositionRollover, bool recalculate = false)
-        {
-            List<Result> results = GetResults(endRound, pilot).ToList();
-
-            if (roundPositionRollover && endRound.StageType == StageTypes.Final)
-            {
-                Round rolloverRound = GetRollOverRound(endRound);
                 if (rolloverRound != null)
                 {
                     Result rollOver = GetRollOver(pilot, rolloverRound, recalculate);
@@ -463,6 +443,14 @@ namespace RaceLib
             }
         }
 
+        public IEnumerable<Result> GetResults(Func<Result, bool> predicate)
+        {
+            lock (Results)
+            {
+                return Results.Where(predicate);
+            }
+        }
+
         public IEnumerable<Result> GetOrderedResults(Race race)
         {
             return GetResults(race).OrderBy(r => r.DNF).ThenBy(r => r.Position);
@@ -481,13 +469,13 @@ namespace RaceLib
 
         public void ClearPoints(Race race)
         {
-            if (ClearPointsNoTrigger(race))
+            if (ClearResultsNoTrigger(race))
             {
                 RaceResultsChanged?.Invoke(race);
             }
         }
 
-        private bool ClearPointsNoTrigger(Race race)
+        private bool ClearResultsNoTrigger(Race race)
         {
             lock (Results)
             {
@@ -516,23 +504,34 @@ namespace RaceLib
             if (!race.Ended)
                 return false;
 
-            if (!race.Round.EventType.HasPoints())
+            if (!race.Round.EventType.HasResult())
                 return false;
 
-            ClearPointsNoTrigger(race);
+            ClearResultsNoTrigger(race);
 
             List<Result> newResults = new List<Result>();
+            PilotTime[] orderedBestLapTimes = race.GetBestLapsTimes(race.TargetLaps).OrderBy(t => t.Time).ToArray();
 
             foreach (Pilot pilot in race.Pilots)
             {
-                int position = race.GetPosition(pilot);
-                int points = GetPoints(position);
+                int position = -1;
+                int points = 0;
                 bool dnfed = false;
 
-                if (DNFed(race, pilot))
+                if (race.Round.EventType.HasPoints())
                 {
-                    points = PointsSettings.DNFPoints;
-                    dnfed = true;
+                    position = race.GetTrackPosition(pilot);
+                    points = GetPoints(position);
+
+                    if (DNFed(race, pilot))
+                    {
+                        points = PointsSettings.DNFPoints;
+                        dnfed = true;
+                    }
+                }
+                else if (race.Round.EventType == EventTypes.TimeTrial)
+                {
+                    position = GetBestLapTimesPosition(orderedBestLapTimes, pilot);
                 }
 
                 Result r = new Result();
@@ -548,7 +547,18 @@ namespace RaceLib
                 Detection lastDetection = race.GetLastDetection(pilot);
                 if (lastDetection != null)
                 {
-                    r.Time = lastDetection.Time - race.Start;
+                    if (race.Round.EventType == EventTypes.TimeTrial)
+                    {
+                        PilotTime pt = orderedBestLapTimes.FirstOrDefault(p => p.Pilot == pilot);
+                        if (pt != null)
+                        {
+                            r.Time = pt.Time;
+                        }
+                    }
+                    else
+                    {
+                        r.Time = lastDetection.Time - race.Start;
+                    }
                     r.LapsFinished = lastDetection.LapNumber;
                 }
                 else
@@ -558,7 +568,6 @@ namespace RaceLib
 
                 newResults.Add(r);
             }
-
 
             RoundFormat roundFormat = null;
             Stage stage = race.Round.Stage;
@@ -637,6 +646,20 @@ namespace RaceLib
             RaceResultsChanged?.Invoke(race);
 
             return r;
+        }
+
+        public int GetBestLapTimesPosition(IEnumerable<PilotTime> orderedBestLapTimes, Pilot pilot)
+        {
+            int position = 1;
+            foreach (PilotTime t in orderedBestLapTimes)
+            {
+                if (t.Pilot == pilot)
+                {
+                    return position;
+                }
+                position++;
+            }
+            return position;
         }
 
         public string GetResultText(Race race, Pilot pilot, Channel channel)
@@ -955,7 +978,7 @@ namespace RaceLib
                 if (races.Any())
                 {
                     int points = 0;
-                    IEnumerable<Result> results = GetResults(pilotRaces, p, rollOver);
+                    IEnumerable<Result> results = GetCreateResults(pilotRaces, p, rollOver);
                     if (results.Any())
                     {
                         points = results.Sum(r => r.Points);
@@ -974,6 +997,23 @@ namespace RaceLib
                 return EventManager.RoundManager.GetCreateRound(startOfFinals.RoundNumber - 1, startOfFinals.EventType);
             }
             return null;
+        }
+    }
+
+    public class PilotTime
+    {
+        public TimeSpan Time { get; set; }
+        public Pilot Pilot { get; set; }
+
+        public PilotTime(Pilot pilot, TimeSpan time)
+        {
+            Pilot = pilot;
+            Time = time;
+        }
+
+        public override string ToString()
+        {
+            return Pilot.ToString() + " " + Time.ToString();
         }
     }
 }

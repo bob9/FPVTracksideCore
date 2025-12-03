@@ -313,8 +313,9 @@ namespace UI.Nodes
             }
 
             pilotInfoContainer = new AnimatedRelativeNode();
-            pilotInfoContainer.RelativeBounds = new RectangleF(0, 0.03f, 0.4f, 0.185f);
+            SetProfileVisible(PilotProfileOptions.Small);
             DisplayNode.AddChild(pilotInfoContainer);
+
 
             pilotNameNode = new ChannelPilotNameNode(EventManager, Channel, ChannelColor, pilotAlpha);
             pilotNameNode.RelativeBounds = new RectangleF(0, 0, 1, 0.65f);
@@ -487,9 +488,6 @@ namespace UI.Nodes
                 pbBackground.Visible = PBNode.HasPB;
             }
 
-            // Set this again incase changing the pilot has changed things.
-            SetProfileVisible(PilotProfileOptions.Large);
-
             if (EventManager.RaceManager.RaceType == EventTypes.Game)
             {
                 int points = EventManager.GameManager.GetCurrentGamePoints(Channel);
@@ -514,24 +512,34 @@ namespace UI.Nodes
 
         private PilotProfileOptions pilotProfileOptions;
 
+        public bool AlwaysSmallPilotProfile { get; set; }
+
         public void SetProfileVisible(PilotProfileOptions options, bool force = false)
         {
-            if (!force && ApplicationProfileSettings.Instance.AlwaysSmallPilotProfile && options == PilotProfileOptions.Large)
+            bool snap = false;
+
+            if (!force && options != PilotProfileOptions.None)
             {
-                options = PilotProfileOptions.Small;
+                if (ApplicationProfileSettings.Instance.AlwaysSmallPilotProfile || AlwaysSmallPilotProfile)
+                {
+                    options = PilotProfileOptions.Small;
+                    snap = true;
+                }
             }
 
             pilotProfileOptions = options;
 
             // Don't do the small option if we're not a video node.
-            if (this is not ChannelVideoNode)
+            if (GetType() == typeof(ChannelNodeBase))
             {
                 options = PilotProfileOptions.Large;
+                snap = true;
             }
 
             if (!PilotProfile.HasProfileImage)
             {
                 options = PilotProfileOptions.None;
+                snap = true;
             }
 
             switch (options)
@@ -539,26 +547,35 @@ namespace UI.Nodes
                 case PilotProfileOptions.None:
                     pilotInfoContainer.RelativeBounds = new RectangleF(0, 0.03f, 0.4f, 0.185f);
                     PilotProfile.SetAnimatedVisibility(false);
+                    
                     PilotProfile.RepeatVideo = false;
+                    PilotProfile.EnableMask = false;
                     break;
 
                 case PilotProfileOptions.Small:
                     PilotProfile.ProfileImageContainer.RelativeBounds = new RectangleF(0, 0.03f, 0.12f, 0.185f);
                     pilotInfoContainer.RelativeBounds = new RectangleF(PilotProfile.ProfileImageContainer.RelativeBounds.Right, 0.03f, 0.4f, 0.185f);
                     PilotProfile.SetAnimatedVisibility(true);
+                    
                     PilotProfile.RepeatVideo = false;
+                    PilotProfile.EnableMask = false;
                     break;
 
                 case PilotProfileOptions.Large:
                     pilotInfoContainer.RelativeBounds = new RectangleF(0, 0.03f, 0.4f, 0.185f);
                     PilotProfile.SetAnimatedVisibility(true);
 
-                    float bottomOfName = pilotInfoContainer.RelativeBounds.Bottom + 0.01f;
-
-                    PilotProfile.ProfileImageContainer.RelativeBounds = new RectangleF(0.4f, bottomOfName, 0.6f, 1 - bottomOfName);
                     PilotProfile.ProfileImageContainer.RelativeBounds = new RectangleF(0, 0, 1, 1);
                     PilotProfile.RepeatVideo = ApplicationProfileSettings.Instance.PilotProfileRepeatVideo;
+                    
+                    PilotProfile.EnableMask = true;
                     break;
+            }
+
+            if (snap)
+            {
+                pilotInfoContainer.Snap();
+                PilotProfile.Snap();
             }
         }
 
@@ -879,7 +896,7 @@ namespace UI.Nodes
                 }
                 else
                 {
-                    showPosition = race.GetPosition(Pilot, out position, out behindWho, out behind);
+                    showPosition = race.GetTrackPosition(Pilot, out position, out behindWho, out behind);
                 }
 
                 if (Pilot.HasFinished(EventManager))

@@ -350,6 +350,8 @@ namespace UI.Nodes.Rounds
 
             foreach (StageNode stageNode1 in FormatStageNodes.ToArray())
             {
+                stageNode1.SetNodes(RoundNodes.Where(rn => rn.Round != null && rn.Round.Stage == stageNode1.Stage));
+
                 if (!stageNode1.Stage.Valid || !stageNode1.HasWrapNodes())
                 {
                     stageNode1.Dispose();
@@ -559,7 +561,9 @@ namespace UI.Nodes.Rounds
 
             Scroller.ViewSizePixels = Bounds.Width;
 
-            Scroller.ContentSizePixels = paddingX;
+            const int extraPaddingForDragAndDropArea = 100;
+
+            Scroller.ContentSizePixels = paddingX + extraPaddingForDragAndDropArea;
             if (EventXNodes.Any())
             {
                 Scroller.ContentSizePixels += EventXNodes.Select(e => e.Bounds.Right).Max() - EventXNodes.Select(e => e.Bounds.X).Min();

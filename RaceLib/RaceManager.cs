@@ -1451,13 +1451,24 @@ namespace RaceLib
                 using (IDatabase db = DatabaseFactory.Open(EventManager.EventId))
                 {
                     db.Insert(d);
+
+                    lock (currentRace.Detections)
+                    {
+                        currentRace.Detections.Add(d);
+                    }
+
+                    // Split (sector) crossings used to reach Race.json only as a
+                    // side effect of the NEXT lap-end write: db.Insert on a
+                    // Detection is a no-op in the JSON database (detections
+                    // persist embedded in the race file). Flush the race now,
+                    // mirroring Race.RecordLap, so anything polling Race.json
+                    // (e.g. the dd-pits venue agent feeding the AUFPV platform's
+                    // live 3D track view) sees each split crossing immediately
+                    // instead of at the pilot's next lap end. Cost: one
+                    // Race.json rewrite per split crossing — same as a lap.
+                    db.Update(currentRace);
                 }
 
-                lock (currentRace.Detections)
-                {
-                    currentRace.Detections.Add(d);
-                }
-                
                 if (d.Valid)
                 {
                     OnSplitDetection?.Invoke(d);
@@ -1546,11 +1557,16 @@ namespace RaceLib
             using (IDatabase db = DatabaseFactory.Open(EventManager.EventId))
             {
                 db.Insert(d);
-            }
 
-            lock (currentRace.Detections)
-            {
-                currentRace.Detections.Add(d);
+                lock (currentRace.Detections)
+                {
+                    currentRace.Detections.Add(d);
+                }
+
+                // Immediate flush, mirroring the split branch of OnDetection —
+                // see the comment there. Manual sector entries must surface in
+                // Race.json straight away too.
+                db.Update(currentRace);
             }
 
             if (d.Valid)

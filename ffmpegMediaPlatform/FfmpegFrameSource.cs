@@ -302,7 +302,22 @@ namespace FfmpegMediaPlatform
                 Tools.Logger.VideoLog.LogDebugCall(this, "FFMPEG Frame source already running, stopping first");
                 Stop();
             }
-            
+
+            // On Mac/Linux Stop() cleans up asynchronously. The old ffmpeg process holds
+            // the capture device until it's killed and disposed - starting a new process
+            // before then gives a permanent black screen.
+            DateTime cleanupWaitStart = DateTime.Now;
+            while (process != null && DateTime.Now - cleanupWaitStart < TimeSpan.FromSeconds(15))
+            {
+                Thread.Sleep(50);
+            }
+
+            if (process != null)
+            {
+                Tools.Logger.VideoLog.LogDebugCall(this, "FFMPEG Previous process didn't clean up in time, aborting start. Will retry on next reconnect.");
+                return false;
+            }
+
             // Reset state for fresh start
             inited = false;
             width = VideoConfig.VideoMode?.Width ?? 640;
@@ -312,7 +327,6 @@ namespace FfmpegMediaPlatform
 
             ProcessStartInfo processStartInfo = GetProcessStartInfo();
 
-            System.Diagnostics.Debug.Assert(process == null);
             process = new Process();
             process.StartInfo = processStartInfo;
             process.ErrorDataReceived += (s, e) =>

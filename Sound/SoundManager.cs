@@ -200,9 +200,62 @@ namespace Sound
         }
 
 
+        /// <summary>
+        /// The AI voice, when one is configured and built. Held so the settings
+        /// screen can rebuild a pack and the race can attach it.
+        /// </summary>
+        public AI.AISpeechService AISpeech { get; private set; }
+
         public void SetupSpeaker(PlatformTools platformTools, string voice, int volume)
         {
             speechManager = new SpeechManager(platformTools, voice, volume);
+            AttachAISpeech();
+        }
+
+        /// <summary>
+        /// Configures the AI voice for a profile. Called before SetupSpeaker so
+        /// a built pack is picked up as the speaker is created.
+        /// </summary>
+        public void SetupAISpeech(AI.AISpeechSettings settings, string profileDirectory)
+        {
+            if (settings == null || !settings.Enabled)
+            {
+                AISpeech = null;
+                return;
+            }
+            AISpeech = new AI.AISpeechService(settings, profileDirectory);
+            AISpeech.Load();
+            AttachAISpeech();
+        }
+
+        /// <summary>
+        /// Points speech at the pre-generated pack when there is one. Silently
+        /// does nothing otherwise, leaving the built-in voice in place — an
+        /// unbuilt pack must never cost a race its calls.
+        /// </summary>
+        private void AttachAISpeech()
+        {
+            if (speechManager == null || AISpeech == null) return;
+
+            if (AISpeech.Attach(speechManager))
+            {
+                Logger.SoundLog.Log(this, "AI Speech",
+                    "using pre-generated voice pack: " + (AISpeech.Pack?.VoiceName ?? "?"), Logger.LogType.Notice);
+            }
+        }
+
+        /// <summary>
+        /// Offers a line of pre-generated colour. Ignored while anything is
+        /// speaking or queued, so a timing call is never delayed by it — the
+        /// calls are the job and commentary only fills the gaps.
+        /// </summary>
+        public void TryCommentary(AI.CommentaryMoment moment)
+        {
+            AI.CommentaryPlayer player = speechManager?.Commentary;
+            if (player == null) return;
+
+            bool busIdle = !IsSpeaking && !(speechManager?.HasSpeech() ?? false);
+            player.TryPlay(moment, busIdle);
         }
 
         public bool HasSpeech()
@@ -832,12 +885,14 @@ namespace Sound
         public void Start()
         {
             PlaySound(SoundKey.RaceStart, new SpeechParameters() { Priority = 10000 });
+            TryCommentary(AI.CommentaryMoment.Launch);
         }
 
 
         public void RaceOver(Race race)
         {
             RaceOver();
+            TryCommentary(AI.CommentaryMoment.Finish);
         }
 
         public void RaceOver()

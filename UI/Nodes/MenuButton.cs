@@ -230,6 +230,11 @@ namespace UI.Nodes
                 ShowSettingsEditor();
             });
 
+            root.AddItem("AI Voice Settings", () =>
+            {
+                ShowAISpeechSettings();
+            });
+
             root.AddItem("Auto Runner Settings", () =>
             {
                 ShowAutoRunnerSettings();
@@ -493,6 +498,80 @@ namespace UI.Nodes
             GetLayer<PopupLayer>().Popup(editor);
         }
 
+        /// <summary>
+        /// AI voice settings, and the button that pre-generates the audio.
+        ///
+        /// Generation is deliberately a separate, explicit action rather than
+        /// something that happens on save: it talks to a cloud service and
+        /// takes minutes, which is fine before a meeting and unacceptable once
+        /// racing has started.
+        /// </summary>
+        public void ShowAISpeechSettings()
+        {
+            Sound.AI.AISpeechSettings settings = Sound.AI.AISpeechSettings.Read(Profile);
+
+            ObjectEditorNode<Sound.AI.AISpeechSettings> editor =
+                new ObjectEditorNode<Sound.AI.AISpeechSettings>(settings, false, true, false);
+
+            editor.OnOK += (a) =>
+            {
+                Sound.AI.AISpeechSettings saved = a.Objects.FirstOrDefault();
+                if (saved == null) return;
+
+                Sound.AI.AISpeechSettings.Write(Profile, saved);
+
+                // Pick up the new voice immediately, so a change is audible
+                // without restarting.
+                soundManager?.SetupAISpeech(saved, Profile.GetPath());
+
+                if (saved.Enabled)
+                {
+                    GenerateVoicePack(saved);
+                }
+            };
+            GetLayer<PopupLayer>().Popup(editor);
+        }
+
+        /// <summary>
+        /// Builds whatever the current event needs that the pack does not
+        /// already have — the core fragments once, then a clip per pilot. Only
+        /// missing pieces are generated, so adding a pilot costs one clip
+        /// rather than a rebuild.
+        /// </summary>
+        private void GenerateVoicePack(Sound.AI.AISpeechSettings settings)
+        {
+            string[] pilots = eventManager?.Event?.Pilots?
+                .Where(p => p != null && !string.IsNullOrWhiteSpace(p.Name))
+                .Select(p => p.Name)
+                .Distinct()
+                .ToArray() ?? new string[0];
+
+            Sound.AI.AISpeechService service = new Sound.AI.AISpeechService(settings, Profile.GetPath());
+
+            LoadingLayer loading = GetLayer<LoadingLayer>();
+            loading?.WorkQueue.Enqueue("Generating voice", () =>
+            {
+                try
+                {
+                    service.BuildAsync(pilots, null, System.Threading.CancellationToken.None)
+                        .GetAwaiter().GetResult();
+
+                    if (settings.CommentaryEnabled)
+                    {
+                        service.GrowCommentaryAsync(null, System.Threading.CancellationToken.None)
+                            .GetAwaiter().GetResult();
+                    }
+
+                    // Switch speech onto the pack now it exists.
+                    soundManager?.SetupAISpeech(settings, Profile.GetPath());
+                }
+                catch (Exception ex)
+                {
+                    Tools.Logger.UI.LogException(this, ex);
+                }
+            });
+        }
+
         public void ShowTimingSettings()
         {
             if (timingSystemManager == null)
@@ -521,6 +600,7 @@ namespace UI.Nodes
                 ApplicationProfileSettings profileSettings = ApplicationProfileSettings.Read(Profile);
 
                 soundManager = new SoundManager(null, Profile);
+                soundManager.SetupAISpeech(Sound.AI.AISpeechSettings.Read(Profile), Profile.GetPath());
                 soundManager.SetupSpeaker(PlatformTools, profileSettings.Voice, profileSettings.TextToSpeechVolume);
                 soundManager.WaitForInit();
             }

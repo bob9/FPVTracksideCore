@@ -698,6 +698,10 @@ namespace UI
 
             if (SoundManager != null)
             {
+                // Configure the AI voice BEFORE the speaker is created, so a
+                // pre-generated pack is picked up as speech starts rather than
+                // the first calls of the meeting going out in the old voice.
+                SoundManager.SetupAISpeech(Sound.AI.AISpeechSettings.Read(Profile), Profile.GetPath());
                 SoundManager.SetupSpeaker(PlatformTools, ApplicationProfileSettings.Instance.Voice, ApplicationProfileSettings.Instance.TextToSpeechVolume);
             }
 

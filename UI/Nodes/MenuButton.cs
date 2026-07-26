@@ -553,7 +553,17 @@ namespace UI.Nodes
             {
                 try
                 {
-                    service.BuildAsync(pilots, null, System.Threading.CancellationToken.None)
+                    // The literal phrases of every ENABLED sound, so each call
+                    // can be assembled locally instead of falling back to the
+                    // system voice — which is what makes it sound like the AI
+                    // voice never took effect.
+                    string[] templates = soundManager?.Sounds?
+                        .Where(snd => snd != null && snd.Enabled && !string.IsNullOrWhiteSpace(snd.TextToSpeech))
+                        .Select(snd => snd.TextToSpeech)
+                        .Distinct()
+                        .ToArray() ?? new string[0];
+
+                    service.BuildAsync(pilots, templates, null, System.Threading.CancellationToken.None)
                         .GetAwaiter().GetResult();
 
                     if (settings.CommentaryEnabled)

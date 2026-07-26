@@ -79,8 +79,22 @@ namespace Sound.AI
         /// Only missing pieces are generated, so adding a pilot to an existing
         /// event costs one clip rather than a rebuild.
         /// </summary>
+        public Task<VoicePackBuildResult> BuildAsync(
+            IEnumerable<string> pilotNames,
+            Action<int, int, string> progress,
+            CancellationToken cancel)
+        {
+            return BuildAsync(pilotNames, null, progress, cancel);
+        }
+
+        /// <summary>
+        /// soundTemplates are the actual TextToSpeech strings the event will
+        /// speak. Passing them is what stops a call falling back to the system
+        /// voice: a phrase the pack has never heard of cannot be assembled.
+        /// </summary>
         public async Task<VoicePackBuildResult> BuildAsync(
             IEnumerable<string> pilotNames,
+            IEnumerable<string> soundTemplates,
             Action<int, int, string> progress,
             CancellationToken cancel)
         {
@@ -94,7 +108,7 @@ namespace Sound.AI
                 Logger.SoundLog?.Log(this, "VoicePack", "failed: " + frag + " — " + ex.Message, Logger.LogType.Error);
 
             VoicePackBuildResult result = await generator.BuildAsync(
-                settings.PackDirectory(profileDirectory), pilotNames, cancel);
+                settings.PackDirectory(profileDirectory), pilotNames, soundTemplates, cancel);
 
             Pack = result.Pack;
             return result;
@@ -142,7 +156,7 @@ namespace Sound.AI
         {
             if (pack == null) yield break;
 
-            foreach (KeyValuePair<string, string> f in VoicePackGenerator.RequiredFragments(pilotNames))
+            foreach (KeyValuePair<string, string> f in VoicePackGenerator.RequiredFragments(pilotNames, null))
             {
                 if (!pack.Has(f.Key)) yield return f.Key;
             }

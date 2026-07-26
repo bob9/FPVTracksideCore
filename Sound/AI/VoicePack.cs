@@ -92,9 +92,24 @@ namespace Sound.AI
         /// </summary>
         public string[] Resolve(string text)
         {
+            string[] tokens = Tokenise(text).ToArray();
             List<string> keys = new List<string>();
-            foreach (string token in Tokenise(text))
+
+            int i = 0;
+            while (i < tokens.Length)
             {
+                // Longest phrase first. A whole clip of "arm your quads starting
+                // on the tone in less than" sounds like a sentence; the same
+                // words played one at a time sound like a station announcement.
+                int matched = MatchLongestPhrase(tokens, i, out string phraseKey);
+                if (matched > 0)
+                {
+                    keys.Add(phraseKey);
+                    i += matched;
+                    continue;
+                }
+
+                string token = tokens[i];
                 if (IsNumeric(token))
                 {
                     foreach (string part in NumberToFragments(token))
@@ -102,18 +117,46 @@ namespace Sound.AI
                         if (!Has(part)) return null;
                         keys.Add(part);
                     }
+                    i++;
                     continue;
                 }
 
                 if (Has(token))
                 {
                     keys.Add(token);
+                    i++;
                     continue;
                 }
                 return null; // an unknown word — better to speak it live than skip it
             }
             return keys.Count > 0 ? keys.ToArray() : null;
         }
+
+        /// <summary>Longest run of tokens from <paramref name="start"/> that the pack holds as one clip.</summary>
+        private int MatchLongestPhrase(string[] tokens, int start, out string key)
+        {
+            key = null;
+            int best = 0;
+            int max = Math.Min(MaxPhraseWords, tokens.Length - start);
+
+            for (int len = max; len >= 2; len--)
+            {
+                string candidate = string.Join(" ", tokens, start, len);
+                if (Has(candidate))
+                {
+                    key = Normalise(candidate);
+                    best = len;
+                    break;
+                }
+            }
+            return best;
+        }
+
+        /// <summary>
+        /// Longest phrase the pack will try to match. Bounded so resolution
+        /// stays cheap: a call is looked up on every lap.
+        /// </summary>
+        public int MaxPhraseWords { get; set; } = 20;
 
         /// <summary>Resolves to actual file paths, or null if anything is missing.</summary>
         public string[] ResolveFiles(string text)

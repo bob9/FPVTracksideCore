@@ -133,6 +133,68 @@ namespace RaceLib.Tests
             }
         }
 
+
+        /// <summary>
+        /// Finishing positions arrive as ABBREVIATIONS. FPVTrackside renders
+        /// "{position}" as "1st", not "first" — and because a guessed word list
+        /// only had "first", every lap call fell back to the system voice,
+        /// which sounds exactly like the AI voice never took effect.
+        /// </summary>
+        [Theory]
+        [InlineData(1, "1st", "first")]
+        [InlineData(2, "2nd", "second")]
+        [InlineData(3, "3rd", "third")]
+        [InlineData(4, "4th", "fourth")]
+        [InlineData(11, "11th", "eleventh")]
+        [InlineData(12, "12th", "twelfth")]
+        [InlineData(13, "13th", "thirteenth")]
+        [InlineData(21, "21st", "twenty first")]
+        public void OrdinalsUseTheAbbreviationTrackssideActuallyEmits(int n, string abbrev, string spoken)
+        {
+            Assert.Equal(abbrev, VoicePackGenerator.Ordinal(n));
+            Assert.Equal(spoken, VoicePackGenerator.OrdinalWords(n));
+        }
+
+        /// <summary>A real lap call, exactly as the log showed it.</summary>
+        [Fact]
+        public void RealLapCallWithOrdinalResolves()
+        {
+            VoicePack pack = BuildPack("Willman");
+            Assert.NotNull(pack.Resolve("Willman lap 1 in 1st"));
+        }
+
+        /// <summary>
+        /// A sound's literal text is generated as ONE clip so it sounds like a
+        /// sentence; only the placeholders are assembled from fragments.
+        /// </summary>
+        [Fact]
+        public void TemplateSplitsIntoLiteralPhrasesAroundPlaceholders()
+        {
+            string[] phrases = VoicePackGenerator
+                .PhrasesFromTemplate("Arm your quads. Starting on the tone in less than {time}").ToArray();
+            Assert.Single(phrases);
+            Assert.Equal("Arm your quads Starting on the tone in less than", phrases[0]);
+
+            string[] two = VoicePackGenerator
+                .PhrasesFromTemplate("{pilot} lap {lapnumber} in {position}").ToArray();
+            Assert.Equal(new[] { "lap", "in" }, two);
+        }
+
+        /// <summary>
+        /// The longest phrase wins, so a generated sentence is played whole
+        /// rather than word by word.
+        /// </summary>
+        [Fact]
+        public void LongestPhraseIsPreferredOverIndividualWords()
+        {
+            VoicePack pack = BuildPack();
+            pack.Add("Arm your quads Starting on the tone in less than", "/tmp/testpack/arm.wav");
+
+            string[] parts = pack.Resolve("Arm your quads. Starting on the tone in less than 5");
+            Assert.NotNull(parts);
+            Assert.Equal(2, parts.Length); // the phrase, then the number
+        }
+
         private static VoicePack BuildPack(params string[] pilots)
         {
             VoicePack pack = new VoicePack("/tmp/testpack");

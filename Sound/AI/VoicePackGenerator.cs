@@ -59,6 +59,15 @@ namespace Sound.AI
             yield return new KeyValuePair<string, string>("point", "point");
             yield return new KeyValuePair<string, string>("hundred", "hundred");
 
+            // Finishing positions arrive as ABBREVIATIONS — "{position}"
+            // renders as "1st", not "first" — so the clip is keyed on the
+            // abbreviation and spoken as the word. Missing these is what sent
+            // every lap call back to the system voice.
+            for (int i = 1; i <= 32; i++)
+            {
+                yield return new KeyValuePair<string, string>(Ordinal(i), OrdinalWords(i));
+            }
+
             string[] words =
             {
                 "lap", "laps", "in", "seconds", "second", "finished", "position",
@@ -72,6 +81,36 @@ namespace Sound.AI
             {
                 yield return new KeyValuePair<string, string>(w, w);
             }
+        }
+
+        /// <summary>"1st", "2nd", "3rd", "4th" — the form FPVTrackside substitutes.</summary>
+        public static string Ordinal(int n)
+        {
+            int lastTwo = n % 100;
+            if (lastTwo >= 11 && lastTwo <= 13) return n + "th";
+            switch (n % 10)
+            {
+                case 1: return n + "st";
+                case 2: return n + "nd";
+                case 3: return n + "rd";
+                default: return n + "th";
+            }
+        }
+
+        /// <summary>The spoken form of an ordinal: "1st" is said "first".</summary>
+        public static string OrdinalWords(int n)
+        {
+            string[] small =
+            {
+                "zeroth", "first", "second", "third", "fourth", "fifth", "sixth", "seventh",
+                "eighth", "ninth", "tenth", "eleventh", "twelfth", "thirteenth", "fourteenth",
+                "fifteenth", "sixteenth", "seventeenth", "eighteenth", "nineteenth", "twentieth"
+            };
+            if (n >= 0 && n < small.Length) return small[n];
+
+            int tens = (n / 10) * 10, ones = n % 10;
+            if (ones == 0) return NumberWords(tens).Replace("y", "ieth");
+            return NumberWords(tens) + " " + small[ones];
         }
 
         /// <summary>English words for 0-99, so the clip sounds like speech.</summary>
@@ -97,6 +136,55 @@ namespace Sound.AI
         }
 
         /// <summary>
+        /// Splits a sound's text into the LITERAL phrases between its
+        /// placeholders.
+        ///
+        /// "Arm your quads. Starting on the tone in less than {time}" yields
+        /// one phrase; {time} is filled at race time from the number
+        /// fragments. Generating that phrase as a single clip is what makes it
+        /// sound like a sentence rather than a word-by-word announcement, and
+        /// it is why the required set is derived from the actual sounds rather
+        /// than a guessed word list — anything missing falls back to the system
+        /// voice, which is exactly the wrong-voice symptom.
+        /// </summary>
+        public static IEnumerable<string> PhrasesFromTemplate(string template)
+        {
+            if (string.IsNullOrWhiteSpace(template)) yield break;
+
+            System.Text.StringBuilder cur = new System.Text.StringBuilder();
+            bool inPlaceholder = false;
+
+            foreach (char c in template)
+            {
+                if (c == '{') { inPlaceholder = true; continue; }
+                if (c == '}')
+                {
+                    inPlaceholder = false;
+                    string done = Clean(cur.ToString());
+                    if (done.Length > 0) yield return done;
+                    cur.Clear();
+                    continue;
+                }
+                if (!inPlaceholder) cur.Append(c);
+            }
+
+            string tail = Clean(cur.ToString());
+            if (tail.Length > 0) yield return tail;
+        }
+
+        /// <summary>
+        /// Trims a phrase to what should be SPOKEN. Sentence punctuation is
+        /// dropped because it is not matched at resolution time, but the words
+        /// are kept in order so the clip still reads naturally.
+        /// </summary>
+        private static string Clean(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return "";
+            string[] words = VoicePack.Tokenise(s).ToArray();
+            return string.Join(" ", words);
+        }
+
+        /// <summary>
         /// Everything a meeting needs: the core fragments plus one clip per
         /// pilot name. Pilot names cannot be composed from anything, so each is
         /// its own fragment — and callsigns are exactly the words a generic TTS
@@ -105,13 +193,42 @@ namespace Sound.AI
         /// </summary>
         public static IEnumerable<KeyValuePair<string, string>> RequiredFragments(IEnumerable<string> pilotNames)
         {
-            foreach (KeyValuePair<string, string> f in CoreFragments()) yield return f;
+            return RequiredFragments(pilotNames, null);
+        }
+
+        /// <summary>
+        /// Everything a meeting needs, including the literal phrases of every
+        /// sound the event will actually speak. Passing the real templates is
+        /// what stops a call falling back to the system voice.
+        /// </summary>
+        public static IEnumerable<KeyValuePair<string, string>> RequiredFragments(
+            IEnumerable<string> pilotNames, IEnumerable<string> soundTemplates)
+        {
+            HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (KeyValuePair<string, string> f in CoreFragments())
+            {
+                if (seen.Add(VoicePack.Normalise(f.Key))) yield return f;
+            }
+
+            if (soundTemplates != null)
+            {
+                foreach (string template in soundTemplates)
+                {
+                    foreach (string phrase in PhrasesFromTemplate(template))
+                    {
+                        if (seen.Add(VoicePack.Normalise(phrase)))
+                            yield return new KeyValuePair<string, string>(phrase, phrase);
+                    }
+                }
+            }
 
             if (pilotNames == null) yield break;
             foreach (string name in pilotNames)
             {
                 if (string.IsNullOrWhiteSpace(name)) continue;
-                yield return new KeyValuePair<string, string>(name, name);
+                if (seen.Add(VoicePack.Normalise(name)))
+                    yield return new KeyValuePair<string, string>(name, name);
             }
         }
 
@@ -119,9 +236,18 @@ namespace Sound.AI
         /// Generates whatever is missing from the pack. Existing clips are left
         /// alone, so this is safe (and quick) to re-run when a pilot is added.
         /// </summary>
+        public Task<VoicePackBuildResult> BuildAsync(
+            string directory,
+            IEnumerable<string> pilotNames,
+            CancellationToken cancel)
+        {
+            return BuildAsync(directory, pilotNames, null, cancel);
+        }
+
         public async Task<VoicePackBuildResult> BuildAsync(
             string directory,
             IEnumerable<string> pilotNames,
+            IEnumerable<string> soundTemplates,
             CancellationToken cancel)
         {
             VoicePack pack = VoicePack.Load(directory) ?? new VoicePack(directory);
@@ -129,7 +255,7 @@ namespace Sound.AI
             pack.VoiceId = voiceId;
             pack.VoiceName = provider.GetVoices().FirstOrDefault(v => v.Id == voiceId)?.Name ?? voiceId;
 
-            KeyValuePair<string, string>[] required = RequiredFragments(pilotNames).ToArray();
+            KeyValuePair<string, string>[] required = RequiredFragments(pilotNames, soundTemplates).ToArray();
             List<KeyValuePair<string, string>> missing = new List<KeyValuePair<string, string>>();
 
             foreach (KeyValuePair<string, string> f in required)

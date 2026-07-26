@@ -315,6 +315,61 @@ namespace RaceLib.Tests
             return pcm;
         }
 
+
+        /// <summary>
+        /// Joining words can never sound natural however well the seams are
+        /// hidden: each clip was spoken alone, so a name carries the falling
+        /// intonation of a word said in isolation. The common calls are
+        /// therefore generated as whole sentences.
+        /// </summary>
+        [Fact]
+        public void CommonCallsAreGeneratedAsWholeSentences()
+        {
+            var compounds = VoicePackGenerator.CompoundPhrases(new[] { "bob9" }).ToList();
+            var keys = compounds.Select(c => VoicePack.Normalise(c.Key)).ToList();
+
+            Assert.Contains("bob9 lap 3 in", keys);
+            Assert.Contains("bob9 finished in 2nd", keys);
+            Assert.Contains("bob9 on r1", keys);
+            Assert.Contains("in 1st", keys);
+
+            // The SPOKEN text carries punctuation the key does not, so the
+            // sentence has natural phrasing rather than reading as a list.
+            string lap3 = compounds.First(c => VoicePack.Normalise(c.Key) == "bob9 lap 3 in").Value;
+            Assert.Contains("lap three", lap3);
+            Assert.Contains(",", lap3);
+
+            // Holeshot keeps its two-word pronunciation inside the phrase.
+            string hs = compounds.First(c => VoicePack.Normalise(c.Key) == "bob9 holeshot").Value;
+            Assert.Contains("hole shot", hs);
+        }
+
+        /// <summary>
+        /// A lap call should now be a sentence plus the time, not eight words.
+        /// The time is the one placeholder too large to pre-generate.
+        /// </summary>
+        [Fact]
+        public void LapCallResolvesToASentencePlusTheTime()
+        {
+            VoicePack pack = BuildPack("bob9");
+            foreach (var c in VoicePackGenerator.CompoundPhrases(new[] { "bob9" }))
+            {
+                pack.Add(c.Key, "/tmp/testpack/" + VoicePackGenerator.FileNameFor(c.Key));
+            }
+
+            string[] parts = pack.Resolve("bob9 lap 3 in 21.34");
+            Assert.NotNull(parts);
+            // "bob9 lap 3 in" + 21 + point + 3 + 4 — one join into the number,
+            // rather than a join between every word.
+            Assert.Equal(5, parts.Length);
+            Assert.Equal("bob9 lap 3 in", parts[0]);
+
+            // A finish call has no time at all, so it is a single clip.
+            string[] finish = pack.Resolve("bob9 finished in 2nd");
+            Assert.NotNull(finish);
+            Assert.Single(finish);
+        }
+
         private static VoicePack BuildPack(params string[] pilots)
         {
             VoicePack pack = new VoicePack("/tmp/testpack");

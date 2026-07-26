@@ -231,6 +231,74 @@ namespace Sound.AI
         }
 
         /// <summary>
+        /// Whole-sentence clips for the calls that dominate a race.
+        ///
+        /// Joining separately-synthesised words can never sound natural, however
+        /// well the seams are hidden: each clip was spoken in isolation, so a
+        /// pilot name carries the flat, falling intonation of a word said alone
+        /// rather than the lift it has mid-sentence. The only real fix is to
+        /// synthesise the sentence.
+        ///
+        /// Most placeholders have few possible values — a handful of pilots, a
+        /// dozen lap numbers, eight finishing positions — so the common calls
+        /// can simply be generated in full. Lap TIMES are the exception, with
+        /// ten thousand values, so a call containing one is generated up to the
+        /// time and the number is still assembled from digits. That leaves one
+        /// join in the middle of a sentence instead of seven between every word.
+        /// </summary>
+        public static IEnumerable<KeyValuePair<string, string>> CompoundPhrases(
+            IEnumerable<string> pilotNames, int maxLaps = 12, int maxPositions = 8)
+        {
+            if (pilotNames == null) yield break;
+
+            foreach (string pilot in pilotNames)
+            {
+                if (string.IsNullOrWhiteSpace(pilot)) continue;
+                string name = pilot.Trim();
+
+                // "bob9 lap 3 in" — the lead-in to a lap time, spoken as one
+                // phrase so the name flows into the words after it.
+                for (int lap = 1; lap <= maxLaps; lap++)
+                {
+                    string phrase = $"{name} lap {lap} in";
+                    yield return new KeyValuePair<string, string>(phrase, $"{name}, lap {NumberWords(lap)}, in");
+                }
+
+                // "bob9 holeshot" — one phrase, and the pronunciation fix rides
+                // along with it.
+                yield return new KeyValuePair<string, string>($"{name} holeshot", $"{name}, hole shot");
+                yield return new KeyValuePair<string, string>($"holeshot {name}", $"hole shot, {name}");
+
+                // "bob9 finished in 2nd" — a complete sentence, no joins at all.
+                for (int pos = 1; pos <= maxPositions; pos++)
+                {
+                    yield return new KeyValuePair<string, string>(
+                        $"{name} finished in {Ordinal(pos)}", $"{name} finished in {OrdinalWords(pos)}");
+                }
+
+                // "bob9 on R1" — the channel call, again as one phrase.
+                string[] bands = { "R", "F", "A", "B", "E", "L", "D", "H" };
+                string[] digitWords = { "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine" };
+                foreach (string band in bands)
+                {
+                    for (int n = 1; n <= 8; n++)
+                    {
+                        yield return new KeyValuePair<string, string>(
+                            $"{name} on {band}{n}", $"{name}, on {band} {digitWords[n]}");
+                    }
+                }
+            }
+
+            // "in 1st" — the tail of a lap call, so the position does not arrive
+            // as a word stranded on its own.
+            for (int pos = 1; pos <= maxPositions; pos++)
+            {
+                yield return new KeyValuePair<string, string>(
+                    $"in {Ordinal(pos)}", $"in {OrdinalWords(pos)}");
+            }
+        }
+
+        /// <summary>
         /// Everything a meeting needs, including the literal phrases of every
         /// sound the event will actually speak. Passing the real templates is
         /// what stops a call falling back to the system voice.
@@ -258,11 +326,20 @@ namespace Sound.AI
             }
 
             if (pilotNames == null) yield break;
+
             foreach (string name in pilotNames)
             {
                 if (string.IsNullOrWhiteSpace(name)) continue;
                 if (seen.Add(VoicePack.Normalise(name)))
                     yield return new KeyValuePair<string, string>(name, name);
+            }
+
+            // Whole-sentence versions of the common calls, so they are spoken
+            // rather than assembled. Longest-match resolution prefers these
+            // over the individual words automatically.
+            foreach (KeyValuePair<string, string> c in CompoundPhrases(pilotNames))
+            {
+                if (seen.Add(VoicePack.Normalise(c.Key))) yield return c;
             }
         }
 

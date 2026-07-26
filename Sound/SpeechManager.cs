@@ -41,6 +41,16 @@ namespace Sound
 
         public int Volume { get; set; }
 
+        /// <summary>
+        /// Pre-generated voice pack, when one is configured and built. Race
+        /// calls then play from disk instead of being synthesised, which is the
+        /// only way a lap time can be spoken the instant it is set.
+        /// </summary>
+        public AI.VoicePackSpeaker VoicePack { get; private set; }
+
+        /// <summary>Colour between the calls. Always yields to a real call.</summary>
+        public AI.CommentaryPlayer Commentary { get; set; }
+
         public SpeechManager(PlatformTools platformTools, string voice, int volume)
         {
             Voice = voice;
@@ -104,6 +114,10 @@ namespace Sound
 
         public void EnqueueSpeech(SpeechRequest speech)
         {
+            // A timing call outranks colour absolutely: cut the filler now
+            // rather than letting it talk over a lap time.
+            Commentary?.Interrupt();
+
             if (ttsQueue == null)
             {
                 speech.OnFinish?.Invoke();
@@ -126,6 +140,28 @@ namespace Sound
                 };
                 ttsQueue.Enqueue(soundWorkItem);
             }
+        }
+
+        /// <summary>
+        /// Routes race calls through a pre-generated pack. The pack wraps the
+        /// platform speaker as its fallback, so a phrase it cannot assemble is
+        /// still spoken live rather than dropped.
+        /// </summary>
+        public void UseVoicePack(AI.VoicePack pack)
+        {
+            if (pack == null)
+            {
+                VoicePack = null;
+                return;
+            }
+            if (speaker == null)
+            {
+                speaker = platformTools.CreateSpeaker(Voice);
+            }
+            AI.VoicePackSpeaker packSpeaker = new AI.VoicePackSpeaker(pack, speaker);
+            packSpeaker.Preload(); // so the first call of the meeting is as quick as the rest
+            VoicePack = packSpeaker;
+            speaker = packSpeaker;
         }
 
         private void Speak(SpeechRequest request)

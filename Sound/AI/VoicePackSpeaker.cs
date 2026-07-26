@@ -31,12 +31,17 @@ namespace Sound.AI
         private volatile bool stopped;
 
         /// <summary>
-        /// Fraction of each clip to let run before starting the next, 0.5-1.0.
-        /// Below 1 the clips overlap slightly, which is how a real commentator
-        /// runs words together — a race call has to be quick, and playing each
-        /// clip to its very last sample makes it drag.
+        /// Milliseconds each fragment overlaps the next. Long enough to hide
+        /// the seam between two separately-synthesised clips, short enough not
+        /// to slur the words together.
         /// </summary>
-        public float Pace { get; set; } = 0.88f;
+        public int OverlapMs { get; set; } = 18;
+
+        /// <summary>Assembled calls kept in memory before the cache is cleared.</summary>
+        public int MaxCachedCalls { get; set; } = 400;
+
+        private readonly Dictionary<string, SoundEffect> callCache =
+            new Dictionary<string, SoundEffect>(StringComparer.Ordinal);
 
         /// <summary>Fragments played from the pack, for diagnostics.</summary>
         public int FragmentsPlayed { get; private set; }
@@ -96,41 +101,80 @@ namespace Sound.AI
                 return;
             }
 
+            SoundEffect call = BuildCall(text, files);
+            if (call == null) { fallback?.Speak(text); return; }
+
             lock (playLock)
             {
-                foreach (string file in files)
-                {
-                    if (stopped) return;
-                    PlayBlocking(file);
-                    FragmentsPlayed++;
-                }
+                if (stopped) return;
+                PlayWhole(call);
+                FragmentsPlayed += files.Length;
             }
         }
 
         /// <summary>
-        /// Plays one fragment and waits for it, so a call comes out as a
-        /// sentence rather than every word at once.
+        /// Assembles a whole call into ONE sound, crossfading the joins.
+        ///
+        /// Playing the fragments as separate sounds was what made calls jerky:
+        /// each boundary carried the scheduling gap of starting another sound,
+        /// and the hard cut between two independently-synthesised clips clicks
+        /// because their waveforms do not meet at zero. As a single buffer the
+        /// call is continuous, and it is cached so a repeated call costs
+        /// nothing at all.
         /// </summary>
-        private void PlayBlocking(string file)
+        private SoundEffect BuildCall(string text, string[] files)
         {
-            SoundEffect effect = Load(file);
-            if (effect == null) return;
+            string key = string.Join("|", files);
+            lock (callCache)
+            {
+                if (callCache.TryGetValue(key, out SoundEffect cached)) return cached;
+            }
 
-            SoundEffectInstance instance = effect.CreateInstance();
+            try
+            {
+                List<byte[]> parts = new List<byte[]>(files.Length);
+                int rate = WavWriter.DefaultSampleRate;
+
+                foreach (string f in files)
+                {
+                    byte[] pcm = WavWriter.ExtractPcm(File.ReadAllBytes(f), out int r);
+                    if (pcm.Length == 0) continue;
+                    rate = r;
+                    parts.Add(pcm);
+                }
+                if (parts.Count == 0) return null;
+
+                byte[] blended = WavWriter.Blend(parts, rate, OverlapMs);
+                SoundEffect effect = new SoundEffect(blended, rate, AudioChannels.Mono);
+
+                lock (callCache)
+                {
+                    // Bounded: a meeting produces many distinct calls and each
+                    // holds its audio in memory.
+                    if (callCache.Count > MaxCachedCalls) callCache.Clear();
+                    callCache[key] = effect;
+                }
+                return effect;
+            }
+            catch (Exception ex)
+            {
+                Logger.SoundLog?.LogException(this, ex);
+                return null;
+            }
+        }
+
+        private void PlayWhole(SoundEffect call)
+        {
+            SoundEffectInstance instance = call.CreateInstance();
             instance.Volume = volume;
 
             lock (playing) playing.Add(instance);
             try
             {
                 instance.Play();
-
-                // Move on slightly before the clip ends so words run together
-                // the way speech does. Polling rather than sleeping the whole
-                // duration also means a higher-priority call can cut in.
-                double budgetMs = effect.Duration.TotalMilliseconds * Math.Clamp(Pace, 0.5f, 1.0f);
-                DateTime deadline = DateTime.Now.AddMilliseconds(budgetMs);
-
-                while (instance.State == SoundState.Playing && !stopped && DateTime.Now < deadline)
+                // One sound now, so this simply waits for the call to finish —
+                // and still notices a higher-priority call stopping it.
+                while (instance.State == SoundState.Playing && !stopped)
                 {
                     System.Threading.Thread.Sleep(5);
                 }
@@ -200,6 +244,14 @@ namespace Sound.AI
                     try { e.Dispose(); } catch { }
                 }
                 cache.Clear();
+            }
+            lock (callCache)
+            {
+                foreach (SoundEffect e in callCache.Values)
+                {
+                    try { e.Dispose(); } catch { }
+                }
+                callCache.Clear();
             }
             fallback?.Dispose();
         }

@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 namespace Sound.AI
 {
@@ -121,6 +123,80 @@ namespace Sound.AI
             byte[] trimmed = new byte[length];
             Buffer.BlockCopy(pcm, startByte, trimmed, 0, length);
             return trimmed;
+        }
+
+        /// <summary>
+        /// Joins fragment PCM into one continuous buffer, crossfading each
+        /// join.
+        ///
+        /// Playing fragments as separate sounds is what made assembled calls
+        /// jerky: every boundary carried scheduling jitter, and the hard cut
+        /// between two independently-synthesised clips clicks because their
+        /// waveforms do not meet at zero. Overlapping them by a few
+        /// milliseconds with an equal-power fade removes both — the call
+        /// becomes one sound rather than a queue of them.
+        ///
+        /// The overlap is short enough not to slur words, long enough to hide
+        /// the seam.
+        /// </summary>
+        public static byte[] Blend(IList<byte[]> parts, int sampleRate, int overlapMs = 18)
+        {
+            if (parts == null || parts.Count == 0) return Array.Empty<byte>();
+            if (parts.Count == 1) return parts[0];
+
+            int overlap = Math.Max(0, sampleRate * overlapMs / 1000);
+            List<short> outp = new List<short>(parts.Sum(p => p.Length / 2));
+
+            foreach (byte[] part in parts)
+            {
+                short[] samples = ToShorts(part);
+                if (samples.Length == 0) continue;
+
+                if (outp.Count == 0) { outp.AddRange(samples); continue; }
+
+                int n = Math.Min(overlap, Math.Min(outp.Count, samples.Length));
+                if (n <= 0) { outp.AddRange(samples); continue; }
+
+                // Equal-power crossfade: a linear fade dips in the middle and
+                // is audible as a dropout on every join.
+                int start = outp.Count - n;
+                for (int i = 0; i < n; i++)
+                {
+                    double t = (i + 1.0) / (n + 1.0);
+                    double fadeOut = Math.Cos(t * Math.PI / 2);
+                    double fadeIn = Math.Sin(t * Math.PI / 2);
+                    double mixed = outp[start + i] * fadeOut + samples[i] * fadeIn;
+                    outp[start + i] = Clamp16(mixed);
+                }
+                for (int i = n; i < samples.Length; i++) outp.Add(samples[i]);
+            }
+            return ToBytes(outp);
+        }
+
+        private static short[] ToShorts(byte[] pcm)
+        {
+            int n = pcm.Length / 2;
+            short[] s = new short[n];
+            for (int i = 0; i < n; i++) s[i] = (short)(pcm[i * 2] | (pcm[i * 2 + 1] << 8));
+            return s;
+        }
+
+        private static byte[] ToBytes(IList<short> samples)
+        {
+            byte[] b = new byte[samples.Count * 2];
+            for (int i = 0; i < samples.Count; i++)
+            {
+                b[i * 2] = (byte)(samples[i] & 0xFF);
+                b[i * 2 + 1] = (byte)((samples[i] >> 8) & 0xFF);
+            }
+            return b;
+        }
+
+        private static short Clamp16(double v)
+        {
+            if (v > short.MaxValue) return short.MaxValue;
+            if (v < short.MinValue) return short.MinValue;
+            return (short)v;
         }
 
         /// <summary>

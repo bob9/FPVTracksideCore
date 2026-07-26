@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using Sound.AI;
 using Xunit;
@@ -245,6 +246,73 @@ namespace RaceLib.Tests
         {
             byte[] quiet = new byte[4800];
             Assert.Equal(quiet.Length, Sound.AI.WavWriter.TrimSilence(quiet, 24000).Length);
+        }
+
+
+        /// <summary>
+        /// Fragments played as separate sounds were jerky: each boundary
+        /// carried the gap of starting another sound, and the hard cut between
+        /// two independently-synthesised clips clicks because their waveforms
+        /// do not meet at zero. Blending overlaps them into one buffer.
+        /// </summary>
+        [Fact]
+        public void BlendOverlapsPartsIntoOneContinuousBuffer()
+        {
+            const int rate = 24000;
+            byte[] a = Tone(rate, 200, 6000);
+            byte[] b = Tone(rate, 200, 6000);
+
+            byte[] blended = Sound.AI.WavWriter.Blend(new[] { a, b }, rate, 18);
+
+            // Shorter than the sum, because the join overlaps.
+            Assert.True(blended.Length < a.Length + b.Length, "parts were not overlapped");
+            Assert.True(blended.Length > a.Length, "the second part was lost");
+            Assert.Equal(0, blended.Length % 2);
+        }
+
+        /// <summary>A single part needs no join and must come back untouched.</summary>
+        [Fact]
+        public void BlendLeavesASinglePartAlone()
+        {
+            byte[] one = Tone(24000, 100, 5000);
+            Assert.Equal(one.Length, Sound.AI.WavWriter.Blend(new[] { one }, 24000).Length);
+            Assert.Empty(Sound.AI.WavWriter.Blend(new byte[0][], 24000));
+        }
+
+        /// <summary>
+        /// The crossfade must not dip at the join — a linear fade loses power
+        /// in the middle and is audible as a dropout on every word boundary.
+        /// </summary>
+        [Fact]
+        public void BlendHoldsLevelAcrossTheJoin()
+        {
+            const int rate = 24000;
+            byte[] blended = Sound.AI.WavWriter.Blend(
+                new[] { Tone(rate, 300, 8000), Tone(rate, 300, 8000) }, rate, 20);
+
+            // Sample across the join region and check nothing collapses.
+            int joinCentre = (rate * 300 / 1000) - (rate * 10 / 1000);
+            int quiet = 0;
+            for (int i = joinCentre - 100; i < joinCentre + 100 && i * 2 + 1 < blended.Length; i++)
+            {
+                short v = (short)(blended[i * 2] | (blended[i * 2 + 1] << 8));
+                if (Math.Abs((int)v) < 2000) quiet++;
+            }
+            Assert.True(quiet < 60, $"{quiet} near-silent samples at the join — the fade dips");
+        }
+
+        /// <summary>A steady tone, for testing joins.</summary>
+        private static byte[] Tone(int rate, int ms, short amplitude)
+        {
+            int n = rate * ms / 1000;
+            byte[] pcm = new byte[n * 2];
+            for (int i = 0; i < n; i++)
+            {
+                short v = (short)(Math.Sin(i * 2 * Math.PI * 440 / rate) * amplitude);
+                pcm[i * 2] = (byte)(v & 0xFF);
+                pcm[i * 2 + 1] = (byte)((v >> 8) & 0xFF);
+            }
+            return pcm;
         }
 
         private static VoicePack BuildPack(params string[] pilots)

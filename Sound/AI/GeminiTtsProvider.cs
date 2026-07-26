@@ -112,7 +112,9 @@ namespace Sound.AI
                 throw new TtsException("Gemini returned no audio (it may have answered in text instead of speaking)", text);
 
             byte[] pcm = Convert.FromBase64String(b64);
-            WavWriter.WritePcm(outputPath, WavWriter.ExtractPcm(pcm, out int embedded), rate > 0 ? rate : embedded);
+            byte[] samples = WavWriter.ExtractPcm(pcm, out int embedded);
+            int outRate = rate > 0 ? rate : embedded;
+            WavWriter.WritePcm(outputPath, WavWriter.TrimSilence(samples, outRate), outRate);
         }
 
         /// <summary>

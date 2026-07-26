@@ -30,6 +30,14 @@ namespace Sound.AI
         private float volume = 1.0f;
         private volatile bool stopped;
 
+        /// <summary>
+        /// Fraction of each clip to let run before starting the next, 0.5-1.0.
+        /// Below 1 the clips overlap slightly, which is how a real commentator
+        /// runs words together — a race call has to be quick, and playing each
+        /// clip to its very last sample makes it drag.
+        /// </summary>
+        public float Pace { get; set; } = 0.88f;
+
         /// <summary>Fragments played from the pack, for diagnostics.</summary>
         public int FragmentsPlayed { get; private set; }
 
@@ -115,11 +123,16 @@ namespace Sound.AI
             try
             {
                 instance.Play();
-                // Poll rather than sleep the exact duration: a fragment can be
-                // stopped mid-word by a higher-priority call, and this notices.
-                while (instance.State == SoundState.Playing && !stopped)
+
+                // Move on slightly before the clip ends so words run together
+                // the way speech does. Polling rather than sleeping the whole
+                // duration also means a higher-priority call can cut in.
+                double budgetMs = effect.Duration.TotalMilliseconds * Math.Clamp(Pace, 0.5f, 1.0f);
+                DateTime deadline = DateTime.Now.AddMilliseconds(budgetMs);
+
+                while (instance.State == SoundState.Playing && !stopped && DateTime.Now < deadline)
                 {
-                    System.Threading.Thread.Sleep(10);
+                    System.Threading.Thread.Sleep(5);
                 }
             }
             finally

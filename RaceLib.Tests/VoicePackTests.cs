@@ -119,8 +119,12 @@ namespace RaceLib.Tests
         [Fact]
         public void CoreFragmentSetIsSmallButCoversEveryTime()
         {
+            // The point is the RATIO, not the exact count: a clip per possible
+            // lap time would be ten thousand. Ordinals and VTX channels have
+            // since been added, so the set is a few hundred — still two orders
+            // of magnitude smaller.
             var core = VoicePackGenerator.CoreFragments().ToArray();
-            Assert.InRange(core.Length, 100, 200);
+            Assert.InRange(core.Length, 100, 400);
 
             VoicePack pack = new VoicePack("/tmp/x");
             foreach (var f in core) pack.Add(f.Key, "/tmp/x/" + f.Key + ".wav");
@@ -193,6 +197,54 @@ namespace RaceLib.Tests
             string[] parts = pack.Resolve("Arm your quads. Starting on the tone in less than 5");
             Assert.NotNull(parts);
             Assert.Equal(2, parts.Length); // the phrase, then the number
+        }
+
+
+        /// <summary>
+        /// VTX channels are spoken as "{band}{number}" — "bob9 on R1". The
+        /// letter is read out, so the clip says "R one" rather than trying to
+        /// pronounce "R1" as a word.
+        /// </summary>
+        [Fact]
+        public void ChannelAnnouncementsResolve()
+        {
+            VoicePack pack = BuildPack("bob9", "Willman");
+            Assert.NotNull(pack.Resolve("bob9 on R1"));
+            Assert.NotNull(pack.Resolve("Willman on R2"));
+            Assert.NotNull(pack.Resolve("bob9 on F4"));
+            Assert.NotNull(pack.Resolve("Willman on L8"));
+        }
+
+        /// <summary>
+        /// Silence at the ends of every clip stacks across an assembled call
+        /// and makes it drag — which is the opposite of what a race needs.
+        /// </summary>
+        [Fact]
+        public void TrimSilenceShortensAClipWithoutLosingTheAudio()
+        {
+            const int rate = 24000;
+            byte[] pcm = new byte[rate * 2]; // one second, mostly quiet
+
+            // A burst of real audio in the middle.
+            for (int i = rate / 2; i < rate / 2 + 2000; i++)
+            {
+                short v = 8000;
+                pcm[i * 2] = (byte)(v & 0xFF);
+                pcm[i * 2 + 1] = (byte)(v >> 8);
+            }
+
+            byte[] trimmed = Sound.AI.WavWriter.TrimSilence(pcm, rate);
+            Assert.True(trimmed.Length < pcm.Length, "nothing was trimmed");
+            Assert.True(trimmed.Length > 2000 * 2, "the audio itself was cut");
+            Assert.Equal(0, trimmed.Length % 2); // still 16-bit aligned
+        }
+
+        /// <summary>All-quiet audio is left alone rather than trimmed to nothing.</summary>
+        [Fact]
+        public void TrimSilenceLeavesSilentClipsAlone()
+        {
+            byte[] quiet = new byte[4800];
+            Assert.Equal(quiet.Length, Sound.AI.WavWriter.TrimSilence(quiet, 24000).Length);
         }
 
         private static VoicePack BuildPack(params string[] pilots)

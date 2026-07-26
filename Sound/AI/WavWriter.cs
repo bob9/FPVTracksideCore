@@ -84,6 +84,46 @@ namespace Sound.AI
         }
 
         /// <summary>
+        /// Trims near-silence from the start and end of 16-bit mono PCM.
+        ///
+        /// Every synthesised clip carries a little silence at each end. That is
+        /// invisible in a single clip, but a race call is five or six clips
+        /// joined, so the padding stacks into a noticeable drag — the call
+        /// sounds slow and disjointed rather than like a commentator. Trimming
+        /// at generation time keeps assembled calls tight.
+        ///
+        /// A small lead-in and tail are kept so words are not clipped.
+        /// </summary>
+        public static byte[] TrimSilence(byte[] pcm, int sampleRate, short threshold = 600, int keepMs = 12)
+        {
+            if (pcm == null || pcm.Length < 4) return pcm ?? Array.Empty<byte>();
+
+            int samples = pcm.Length / 2;
+            int first = -1, last = -1;
+
+            for (int i = 0; i < samples; i++)
+            {
+                short v = (short)(pcm[i * 2] | (pcm[i * 2 + 1] << 8));
+                if (Math.Abs((int)v) < threshold) continue;
+                if (first < 0) first = i;
+                last = i;
+            }
+            if (first < 0) return pcm; // all quiet — leave it alone
+
+            int keep = Math.Max(0, sampleRate * keepMs / 1000);
+            first = Math.Max(0, first - keep);
+            last = Math.Min(samples - 1, last + keep);
+
+            int startByte = first * 2;
+            int length = (last - first + 1) * 2;
+            if (length <= 0 || startByte + length > pcm.Length) return pcm;
+
+            byte[] trimmed = new byte[length];
+            Buffer.BlockCopy(pcm, startByte, trimmed, 0, length);
+            return trimmed;
+        }
+
+        /// <summary>
         /// Joins several WAVs into one, with optional silence between them.
         /// Used to bake a multi-fragment phrase into a single clip so playback
         /// is one file open rather than several.

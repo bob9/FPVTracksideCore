@@ -68,11 +68,24 @@ namespace Sound.AI
                 yield return new KeyValuePair<string, string>(Ordinal(i), OrdinalWords(i));
             }
 
+            // VTX channels are spoken as "{band letter}{number}" — "R1", "F4".
+            // The letter is read out, so the clip says "R one" rather than
+            // attempting to pronounce "R1" as a word.
+            string[] bands = { "R", "F", "A", "B", "E", "L", "D", "H", "W", "N", "U", "O" };
+            string[] digitWords = { "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine" };
+            foreach (string band in bands)
+            {
+                for (int n = 1; n <= 8; n++)
+                {
+                    yield return new KeyValuePair<string, string>(band + n, band + " " + digitWords[n]);
+                }
+            }
+
             string[] words =
             {
                 "lap", "laps", "in", "seconds", "second", "finished", "position",
                 "first", "second place", "third", "fourth", "fifth", "sixth",
-                "seventh", "eighth", "holeshot", "sector", "and", "with",
+                "seventh", "eighth", "sector", "and", "with",
                 "fastest", "best", "personal best", "leads", "behind", "ahead",
                 "of", "on", "for", "race", "round", "over", "go", "next up",
                 "results", "time", "remaining", "up", "done",
@@ -80,6 +93,14 @@ namespace Sound.AI
             foreach (string w in words)
             {
                 yield return new KeyValuePair<string, string>(w, w);
+            }
+
+            // Words a voice says wrong when handed the written form. The KEY
+            // stays as FPVTrackside writes it so calls still resolve; only the
+            // text sent to the voice changes.
+            foreach (KeyValuePair<string, string> p in Pronunciations)
+            {
+                yield return p;
             }
         }
 
@@ -112,6 +133,19 @@ namespace Sound.AI
             if (ones == 0) return NumberWords(tens).Replace("y", "ieth");
             return NumberWords(tens) + " " + small[ones];
         }
+
+        /// <summary>
+        /// Spellings for words a synthesised voice mispronounces.
+        ///
+        /// "holeshot" is one word in racing but reads as a mumble unless it is
+        /// spelled as two, so the clip is generated from "hole shot" while
+        /// still being keyed on "holeshot" — the call text is unchanged.
+        /// </summary>
+        public static readonly KeyValuePair<string, string>[] Pronunciations =
+        {
+            new KeyValuePair<string, string>("holeshot", "hole shot"),
+            new KeyValuePair<string, string>("hole shot", "hole shot"),
+        };
 
         /// <summary>English words for 0-99, so the clip sounds like speech.</summary>
         public static string NumberWords(int n)

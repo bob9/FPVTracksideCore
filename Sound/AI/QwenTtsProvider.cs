@@ -195,7 +195,7 @@ namespace Sound.AI
             }
 
             byte[] pcm = WavWriter.ExtractPcm(raw, out int rate);
-            WavWriter.WritePcm(outputPath, pcm, rate);
+            WavWriter.WritePcm(outputPath, WavWriter.TrimSilence(pcm, rate), rate);
         }
 
         public async Task<bool> TestAsync(CancellationToken cancel)

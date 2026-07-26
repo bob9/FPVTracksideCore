@@ -18,15 +18,36 @@ namespace RaceLib.Tests
         /// every possible time would be ten thousand clips; this is why it is
         /// about a hundred.
         /// </summary>
+        /// <summary>
+        /// A decimal is ONE fragment when the pack has it. Spelling "4.12" out
+        /// as "four point one two" gave four clips with a join between every
+        /// digit, and it read like a phone number rather than a lap time.
+        /// </summary>
         [Theory]
-        [InlineData("21.34", new[] { "21", "point", "3", "4" })]
-        [InlineData("9.07", new[] { "9", "point", "0", "7" })]
-        [InlineData("100.5", new[] { "1", "hundred", "point", "5" })]
+        [InlineData("21.34", new[] { "21", "point34" })]
+        [InlineData("9.07", new[] { "9", "point07" })]
+        [InlineData("100.5", new[] { "1", "hundred", "point5" })]
         [InlineData("3", new[] { "3" })]
-        [InlineData("0.99", new[] { "0", "point", "9", "9" })]
+        [InlineData("0.99", new[] { "0", "point99" })]
         public void NumberSplitsIntoSpeakableFragments(string input, string[] expected)
         {
-            Assert.Equal(expected, VoicePack.NumberToFragments(input).ToArray());
+            VoicePack pack = BuildPack();
+            Assert.Equal(expected, pack.NumberToFragments(input).ToArray());
+        }
+
+        /// <summary>
+        /// A pack generated before the whole-decimal clips existed must still
+        /// speak, so the spelled-out form remains as a fallback.
+        /// </summary>
+        [Fact]
+        public void OlderPackWithoutDecimalClipsStillSpeaks()
+        {
+            VoicePack pack = new VoicePack("/tmp/testpack");
+            foreach (string k in new[] { "4", "point", "1", "2" })
+            {
+                pack.Add(k, "/tmp/testpack/" + VoicePackGenerator.FileNameFor(k));
+            }
+            Assert.Equal(new[] { "4", "point", "1", "2" }, pack.NumberToFragments("4.12").ToArray());
         }
 
         /// <summary>
@@ -44,7 +65,7 @@ namespace RaceLib.Tests
         }
 
         [Theory]
-        [InlineData("bob9 lap 3 in 21.34", new[] { "bob9", "lap", "3", "in", "21", "point", "3", "4" })]
+        [InlineData("bob9 lap 3 in 21.34", new[] { "bob9", "lap", "3", "in", "21", "point34" })]
         [InlineData("Willman finished in 2", new[] { "willman", "finished", "in", "2" })]
         public void CallResolvesToFragments(string call, string[] expectedKeys)
         {
@@ -121,11 +142,12 @@ namespace RaceLib.Tests
         public void CoreFragmentSetIsSmallButCoversEveryTime()
         {
             // The point is the RATIO, not the exact count: a clip per possible
-            // lap time would be ten thousand. Ordinals and VTX channels have
-            // since been added, so the set is a few hundred — still two orders
-            // of magnitude smaller.
+            // lap time would be ten thousand. Ordinals, channels, whole
+            // decimals and the countdown sentences have since been added, so
+            // the set is several hundred — still an order of magnitude smaller,
+            // and it buys calls that sound spoken rather than assembled.
             var core = VoicePackGenerator.CoreFragments().ToArray();
-            Assert.InRange(core.Length, 100, 400);
+            Assert.InRange(core.Length, 100, 900);
 
             VoicePack pack = new VoicePack("/tmp/x");
             foreach (var f in core) pack.Add(f.Key, "/tmp/x/" + f.Key + ".wav");
@@ -359,10 +381,12 @@ namespace RaceLib.Tests
 
             string[] parts = pack.Resolve("bob9 lap 3 in 21.34");
             Assert.NotNull(parts);
-            // "bob9 lap 3 in" + 21 + point + 3 + 4 — one join into the number,
-            // rather than a join between every word.
-            Assert.Equal(5, parts.Length);
+            // "bob9 lap 3 in" + "21" + "point34" — a spoken sentence, the whole
+            // number, and the decimal as one tight unit. Three clips where the
+            // original word-by-word assembly took eight.
+            Assert.Equal(3, parts.Length);
             Assert.Equal("bob9 lap 3 in", parts[0]);
+            Assert.Equal("point34", parts[2]);
 
             // A finish call has no time at all, so it is a single clip.
             string[] finish = pack.Resolve("bob9 finished in 2nd");

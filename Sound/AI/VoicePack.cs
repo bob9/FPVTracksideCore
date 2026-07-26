@@ -213,7 +213,7 @@ namespace Sound.AI
         /// point, three, four", not "twenty one point thirty four" — so the
         /// decimals are individual digits.
         /// </summary>
-        public static IEnumerable<string> NumberToFragments(string token)
+        public IEnumerable<string> NumberToFragments(string token)
         {
             int dot = token.IndexOf('.');
             string whole = dot < 0 ? token : token.Substring(0, dot);
@@ -223,11 +223,20 @@ namespace Sound.AI
 
             foreach (string part in WholeNumberFragments(w)) yield return part;
 
-            if (frac.Length > 0)
-            {
-                yield return "point";
-                foreach (char d in frac) yield return d.ToString();
-            }
+            if (frac.Length == 0) yield break;
+
+            // The decimal is ONE fragment, not a "point" plus loose digits.
+            // Spelling it out gave four clips for "4.12" — "four", "point",
+            // "one", "two" — which reads as a phone number, with a join and a
+            // breath between every digit. A lap time has to land tight.
+            string tail = "point" + frac;
+            if (Has(tail)) { yield return tail; yield break; }
+
+            // Two decimals is what a lap time carries; if the pack predates
+            // these clips, fall back to the older spelled-out form so the call
+            // still speaks rather than failing to resolve.
+            yield return "point";
+            foreach (char d in frac) yield return d.ToString();
         }
 
         /// <summary>

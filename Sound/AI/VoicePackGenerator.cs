@@ -59,6 +59,23 @@ namespace Sound.AI
             yield return new KeyValuePair<string, string>("point", "point");
             yield return new KeyValuePair<string, string>("hundred", "hundred");
 
+            // Whole decimals: "point one two" as ONE clip. Spelling a time out
+            // as separate digits made "4.12" four clips and it read like a
+            // phone number — a lap time has to land tight, in one breath.
+            // A hundred clips covers every two-decimal time.
+            string[] digitNames = { "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine" };
+            for (int d = 0; d <= 99; d++)
+            {
+                string digits = d.ToString("00", CultureInfo.InvariantCulture);
+                yield return new KeyValuePair<string, string>(
+                    "point" + digits, "point " + digitNames[digits[0] - '0'] + " " + digitNames[digits[1] - '0']);
+            }
+            // Single-decimal times ("3.5") appear in some sounds.
+            for (int d = 0; d <= 9; d++)
+            {
+                yield return new KeyValuePair<string, string>("point" + d, "point " + digitNames[d]);
+            }
+
             // Finishing positions arrive as ABBREVIATIONS — "{position}"
             // renders as "1st", not "first" — so the clip is keyed on the
             // abbreviation and spoken as the word. Missing these is what sent
@@ -79,6 +96,27 @@ namespace Sound.AI
                 {
                     yield return new KeyValuePair<string, string>(band + n, band + " " + digitWords[n]);
                 }
+            }
+
+            // Countdown and time-remaining announcements as WHOLE sentences.
+            // "{time} remaining" rendered as "60 seconds remaining" and was
+            // being assembled from three clips, which is audibly jagged for a
+            // line the whole field is listening for.
+            for (int n = 1; n <= 60; n++)
+            {
+                string words60 = NumberWords(n);
+                yield return new KeyValuePair<string, string>(
+                    n + " seconds remaining", words60 + " seconds remaining");
+                yield return new KeyValuePair<string, string>(
+                    n + " seconds", words60 + " seconds");
+            }
+            for (int m = 1; m <= 10; m++)
+            {
+                string unit = m == 1 ? "minute" : "minutes";
+                yield return new KeyValuePair<string, string>(
+                    m + " " + unit + " remaining", NumberWords(m) + " " + unit + " remaining");
+                yield return new KeyValuePair<string, string>(
+                    m + " " + unit, NumberWords(m) + " " + unit);
             }
 
             string[] words =

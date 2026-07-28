@@ -73,6 +73,17 @@ namespace UI
         [NeedsRestart]
         public bool UseDirectX9 { get; set; }
 
+        public enum TextRendererBackend
+        {
+            WPF,
+            Skia
+        }
+
+        [Category("Performance")]
+        [DisplayName("Text Renderer")]
+        [NeedsRestart]
+        public TextRendererBackend TextRenderer { get; set; }
+
         [DisplayName("Video recordings to keep")]
         [Category("Video")]
         public int VideosToKeep { get; set; }
@@ -130,6 +141,10 @@ namespace UI
         public bool PostRaceScene { get; set; }
 
         [Category("Layout")]
+        [DisplayName("Show Race Start/GO Graphic (If theme has it)")]
+        public bool ShowRaceStartGraphic { get; set; }
+
+        [Category("Layout")]
         public bool AlwaysShowPosition { get; set; }
 
         [Category("Layout")]
@@ -174,6 +189,13 @@ namespace UI
         [Category("Sound")]
         [NeedsRestart]
         public int[] RemainingSecondsToAnnounce { get; set; }
+
+        [Category("Sound")]
+        public bool ShowSubtitles { get; set; }
+
+        [Category("Sound")]
+        [DisplayName("Subtitle Timeout (seconds)")]
+        public float SubtitleTimeoutSeconds { get; set; }
 
         [Category("Start Rules")]
         public bool TimeTrialStaggeredStart { get; set; }
@@ -349,6 +371,9 @@ namespace UI
             PilotOrderPostRace = OrderTypes.PositionAndPB;
 
             TextToSpeechVolume = 100;
+            SubtitleTimeoutSeconds = 5;
+            ShowSubtitles = false;
+            ShowRaceStartGraphic = true;
 
             ChannelGrid1 = true;
             ChannelGrid2 = true;
@@ -414,6 +439,7 @@ namespace UI
             ShownDecimalPlaces = 2;
             ExportDecimalPlaces = 3;
             UseDirectX9 = false;
+            TextRenderer = TextRendererBackend.WPF;
             ShowPositionDeltaTime = 6;
             Language = "English";
             ShowDownPilotLapTimes = true;

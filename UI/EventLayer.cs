@@ -47,6 +47,8 @@ namespace UI
 
         protected SceneManagerNode sceneManagerNode;
 
+        private RaceStartNode raceStartNode;
+
         private TopBarNode topBar;
         private AspectNode centralAspectNode;
         private AnimatedNode rightBar;
@@ -148,6 +150,27 @@ namespace UI
             EventManager.RaceManager.TimingSystemManager.OnDisconnected += () =>
             {
                 SoundManager.TimingSystemDisconnected();
+            };
+
+            EventManager.RaceManager.TimingSystemManager.RaceStartRequest += () =>
+            {
+                PlatformTools.Invoke(() =>
+                {
+                    Logger.UI.Log(this, "ELRS race control", "Start requested", Logger.LogType.Notice);
+                    StartRaceWithVideoCheck();
+                });
+            };
+
+            EventManager.RaceManager.TimingSystemManager.RaceStopRequest += () =>
+            {
+                PlatformTools.Invoke(() =>
+                {
+                    Logger.UI.Log(this, "ELRS race control", "Stop requested", Logger.LogType.Notice);
+                    if (EventManager.RaceManager.RaceRunning || EventManager.RaceManager.PreRaceStartDelay)
+                    {
+                        StopRace();
+                    }
+                });
             };
 
             EventManager.RaceManager.OnRaceTimeRemaining += (r, t) =>
@@ -302,7 +325,7 @@ namespace UI
 
             MenuButton.TimingChanged += () =>
             {
-                systemStatusNode.SetupStatuses(EventManager.RaceManager.TimingSystemManager, videoManager, SoundManager, OBSRemoteControlManager);
+                systemStatusNode.SetupStatuses(EventManager.RaceManager.TimingSystemManager, videoManager, SoundManager, OBSRemoteControlManager, sceneManagerNode.SubtitleNode);
             };
 
             MenuButton.VideoSettingsExited += (bool changed) =>
@@ -338,7 +361,7 @@ namespace UI
             float width = 0.95f;
 
             systemStatusNode = new SystemStatusNode();
-            systemStatusNode.SetupStatuses(EventManager.RaceManager.TimingSystemManager, videoManager, SoundManager, OBSRemoteControlManager);
+            systemStatusNode.SetupStatuses(EventManager.RaceManager.TimingSystemManager, videoManager, SoundManager, OBSRemoteControlManager, sceneManagerNode.SubtitleNode);
             systemStatusNode.RelativeBounds = new RectangleF((1 - width) / 2, MenuButton.RelativeBounds.Bottom + 0.01f, width, 1);
             rightSideColor.AddChild(systemStatusNode);
 
@@ -425,6 +448,17 @@ namespace UI
             {
                 Popuper.PopupMessage("Warning / Reminder: Dummy timer is active");
             }
+
+            raceStartNode = new RaceStartNode();
+            Root.AddChild(raceStartNode);
+
+            EventManager.RaceManager.OnRaceStart += (race) =>
+            {
+                if (ApplicationProfileSettings.Instance.ShowRaceStartGraphic)
+                {
+                    raceStartNode.Show();
+                }
+            };
         }
 
         private void RaceManager_OnHitPackLimit(Pilot pilot, int packCount)
@@ -447,7 +481,7 @@ namespace UI
 
         protected virtual SceneManagerNode CreateSceneManagerNode(EventManager eventManager, VideoManager videoManager, ChannelsGridNode channelsGridNode, TopBarNode topBarNode, AutoRunner autoRunner)
         {
-            return new SceneManagerNode(eventManager, videoManager, channelsGridNode, topBarNode, autoRunner);
+            return new SceneManagerNode(eventManager, videoManager, channelsGridNode, topBarNode, autoRunner, SoundManager);
         }
 
         protected virtual MenuButton CreateMenuButton()
@@ -620,7 +654,7 @@ namespace UI
             OBSRemoteControlManager?.Dispose();
             OBSRemoteControlManager = new OBSRemoteControlManager(sceneManagerNode, TabbedMultiNode, EventManager);
 
-            systemStatusNode.SetupStatuses(EventManager.RaceManager.TimingSystemManager, videoManager, SoundManager, OBSRemoteControlManager);
+            systemStatusNode.SetupStatuses(EventManager.RaceManager.TimingSystemManager, videoManager, SoundManager, OBSRemoteControlManager, sceneManagerNode.SubtitleNode);
         }
 
         public void ResumeRace()
@@ -667,7 +701,7 @@ namespace UI
                     ChannelsGridNode.FillChannelNodes();
 
                     sceneManagerNode.SetupCams();
-                    systemStatusNode.SetupStatuses(EventManager.RaceManager.TimingSystemManager, videoManager, SoundManager, OBSRemoteControlManager);
+                    systemStatusNode.SetupStatuses(EventManager.RaceManager.TimingSystemManager, videoManager, SoundManager, OBSRemoteControlManager, sceneManagerNode.SubtitleNode);
 
                     if (current != null)
                     {

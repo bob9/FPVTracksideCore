@@ -29,6 +29,7 @@ namespace UI
         public string FontFamily { get; set; }
         public ToolTexture Background { get; set; }
         public ToolTexture FPVTracksideLogo { get; set; }
+        public ToolTexture RaceStartGraphic { get; set; }
 
         public ToolColor TextAlt { get; set; }
         public ToolColor TextMain { get; set; }
@@ -45,6 +46,9 @@ namespace UI
 
         public ToolColor PanelAlt { get; set; }
         public ToolColor Panel { get; set; }
+
+        public ToolTexture SubtitleBackground { get; set; }
+        public ToolColor SubtitleText { get; set; }
 
         public ToolColor ScrollBar { get; set; }
                 
@@ -89,6 +93,7 @@ namespace UI
             Tabs = new PanelTheme();
 
             FPVTracksideLogo = new ToolTexture(@"img\logo.png", 0, 0, 0, 0);
+            RaceStartGraphic = new ToolTexture(@"racestart.png", 0, 0, 0, 0);
 
             PilotViewTheme = new PilotTheme();
 
@@ -262,6 +267,11 @@ namespace UI
             if (EventSelectorTop == null)
                 EventSelectorTop = new ToolTexture(TopPanel.R, TopPanel.G, TopPanel.B, TopPanel.A);
 
+            if (SubtitleBackground == null)
+                SubtitleBackground = new ToolTexture(RightControls.Background);
+
+            if (SubtitleText == null)
+                SubtitleText = new ToolColor(RightControls.Text.XNA);
         }
 
 

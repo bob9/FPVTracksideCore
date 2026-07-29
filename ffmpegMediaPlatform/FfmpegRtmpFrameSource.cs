@@ -35,23 +35,26 @@ namespace FfmpegMediaPlatform
             };
         }
 
-        protected override void Run()
+        protected override void Run(int generation)
         {
             byte[] readBuffer = null;
             int totalBytesRead = 0;
             System.Threading.Tasks.Task<int> pendingRead = null;
 
-            while (run)
+            while (run && generation == RunGeneration)
             {
                 try
                 {
+                    // Snapshot before use — the stop path nulls the field from another thread.
+                    Process p = process;
+
                     if (!inited)
                     {
                         System.Threading.Thread.Sleep(10);
                         continue;
                     }
 
-                    if (process == null || process.HasExited)
+                    if (p == null || ProcessHasExited(p))
                     {
                         // Client disconnected or ffmpeg exited — restart to listen again
                         Connected = false;
@@ -74,7 +77,7 @@ namespace FfmpegMediaPlatform
 
                     // Only start a new read if there isn't one already in flight
                     if (pendingRead == null)
-                        pendingRead = process.StandardOutput.BaseStream.ReadAsync(readBuffer, totalBytesRead, bytesToRead - totalBytesRead);
+                        pendingRead = p.StandardOutput.BaseStream.ReadAsync(readBuffer, totalBytesRead, bytesToRead - totalBytesRead);
 
                     if (!pendingRead.Wait(frameIntervalMs))
                     {

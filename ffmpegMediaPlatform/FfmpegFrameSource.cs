@@ -54,7 +54,30 @@ namespace FfmpegMediaPlatform
         protected Thread thread;
         protected volatile bool run;
         protected bool inited;
-        
+
+        // Diagnostics. ffmpeg's own stderr is the only place that says *why* a capture failed, and
+        // LogDebugCall is compiled out of release builds - so a curated subset of it is logged at
+        // Notice level. Without this a failed device open is indistinguishable from a working one
+        // in a user-supplied log: both just show "Failed to read a frame after 10000ms".
+        private const int MaxNoticeStderrLinesPerStart = 25;
+        private int noticeStderrLines;
+        private volatile bool sawFfmpegInputOpen;
+        private DateTime processStartedAt;
+        private long totalBytesEverRead;
+        private volatile bool loggedFirstFrame;
+        private volatile bool loggedProcessExit;
+
+        // Incremented on every Start(). A reader thread from a previous start can outlive its
+        // Stop() (it blocks in stream.Read on the ffmpeg pipe and cannot see run=false), so each
+        // thread carries the generation it was started with and exits if a newer one exists.
+        private volatile int runGeneration;
+
+        /// <summary>
+        /// The generation of the current Start(). A reader thread whose generation no longer
+        /// matches has been superseded and must exit rather than race the new one.
+        /// </summary>
+        protected int RunGeneration => runGeneration;
+
         // Recording implementation
         protected string recordingFilename;
         private List<FrameTime> frameTimes;
@@ -169,7 +192,7 @@ namespace FfmpegMediaPlatform
             Tools.Logger.VideoLog.LogCall(this, $"Stopped RGBA recording to {recordingFilename}");
         }
 
-        protected void InitializeFrameProcessing()
+        protected void InitializeFrameProcessing(string reason = "unspecified")
         {
             // Use the dimensions from VideoConfig since ffmpeg is successfully processing
             width = VideoConfig.VideoMode?.Width ?? 640;
@@ -178,7 +201,7 @@ namespace FfmpegMediaPlatform
             buffer = new byte[width * height * 4];  // RGBA = 4 bytes per pixel
             rawTextures = new XBuffer<RawTexture>(5, width, height);
 
-            Tools.Logger.VideoLog.LogCall(this, $"FFMPEG Initialized with {width}x{height}, buffer size: {buffer.Length} bytes");
+            Tools.Logger.VideoLog.LogCall(this, $"FFMPEG Initialized with {width}x{height}, buffer size: {buffer.Length} bytes (trigger: {reason})");
             inited = true;
         }
 
@@ -186,7 +209,7 @@ namespace FfmpegMediaPlatform
         {
             Tools.Logger.VideoLog.LogDebugCall(this, "Force re-initializing frame processing");
             inited = false;
-            InitializeFrameProcessing();
+            InitializeFrameProcessing("forced re-initialize");
         }
 
         private void RestartForRecording()
@@ -325,7 +348,19 @@ namespace FfmpegMediaPlatform
             buffer = new byte[width * height * 4];
             rawTextures = new XBuffer<RawTexture>(5, width, height);
 
+            // Reset per-start diagnostics
+            noticeStderrLines = 0;
+            sawFfmpegInputOpen = false;
+            totalBytesEverRead = 0;
+            loggedFirstFrame = false;
+            loggedProcessExit = false;
+            int myGeneration = ++runGeneration;
+
             ProcessStartInfo processStartInfo = GetProcessStartInfo();
+
+            // The exact command is the single most useful line in a support log - it pins down the
+            // device name, pixel format, size and frame rate we actually asked the driver for.
+            Tools.Logger.VideoLog.LogCall(this, $"FFMPEG command: {processStartInfo.FileName} {processStartInfo.Arguments}");
 
             process = new Process();
             process.StartInfo = processStartInfo;
@@ -357,6 +392,27 @@ namespace FfmpegMediaPlatform
                     {
                         Logger.VideoLog.LogDebugCall(this, e.Data);
                     }
+
+                    // Promote the lines that explain a failure to Notice, so they survive into a
+                    // release build's log. Capped per start so a chatty decoder can't drown the log.
+                    if (IsDiagnosticFfmpegLine(e.Data) && noticeStderrLines < MaxNoticeStderrLinesPerStart)
+                    {
+                        noticeStderrLines++;
+                        Tools.Logger.VideoLog.Log(this, "FFMPEG: " + e.Data.Trim());
+
+                        if (noticeStderrLines == MaxNoticeStderrLinesPerStart)
+                        {
+                            Tools.Logger.VideoLog.Log(this, $"FFMPEG: (further diagnostic output suppressed for this start)");
+                        }
+                    }
+
+                    // "Input #0" is only printed once the demuxer has the first frame in hand. On
+                    // avfoundation/dshow the header read blocks until the device delivers, so the
+                    // absence of this line means the capture never started - not that it stalled later.
+                    if (e.Data.Contains("Input #"))
+                    {
+                        sawFfmpegInputOpen = true;
+                    }
                 }
 
                 // Initialize immediately when we see the first frame progress update
@@ -364,9 +420,9 @@ namespace FfmpegMediaPlatform
                 if (!inited && e.Data != null && (e.Data.Contains("frame=") && e.Data.Contains("fps=")))
                 {
                     Tools.Logger.VideoLog.LogDebugCall(this, $"FFMPEG Frame output detected - initializing frame processing");
-                    InitializeFrameProcessing();
+                    InitializeFrameProcessing("ffmpeg frame progress");
                 }
-                
+
                 // Also try to detect stream lines if they appear (fallback method)
                 if (!inited && e.Data != null && e.Data.Contains("Stream") && e.Data.Contains("Video:"))
                 {
@@ -410,7 +466,7 @@ namespace FfmpegMediaPlatform
                         if (!inited && run)
                         {
                             Tools.Logger.VideoLog.LogDebugCall(this, "Fallback initialization after FFmpeg message detection");
-                            InitializeFrameProcessing();
+                            InitializeFrameProcessing("ffmpeg header output, 1500ms");
                         }
                     });
                 }
@@ -424,7 +480,7 @@ namespace FfmpegMediaPlatform
                         if (!inited && run)
                         {
                             Tools.Logger.VideoLog.LogDebugCall(this, "Initialization after filter complex setup");
-                            InitializeFrameProcessing();
+                            InitializeFrameProcessing("filter graph setup, 1000ms");
                         }
                     });
                 }
@@ -434,10 +490,11 @@ namespace FfmpegMediaPlatform
             {
                 Tools.ProcessJobObject.Instance?.AddProcess(process);
 
+                processStartedAt = DateTime.Now;
                 run = true;
                 Connected = true;
 
-                thread = new Thread(Run);
+                thread = new Thread(() => Run(myGeneration));
                 thread.Name = "ffmpeg - " + VideoConfig.DeviceName;
                 thread.Start();
 
@@ -454,7 +511,7 @@ namespace FfmpegMediaPlatform
                         if (!inited && run)
                         {
                             Tools.Logger.VideoLog.LogDebugCall(this, "Windows: Immediate initialization executing");
-                            InitializeFrameProcessing();
+                            InitializeFrameProcessing("windows fast start, 500ms");
                         }
                     });
                 }
@@ -465,8 +522,14 @@ namespace FfmpegMediaPlatform
                 {
                     if (!inited && run)
                     {
-                        Tools.Logger.VideoLog.LogDebugCall(this, $"Timeout-based fallback initialization ({timeoutMs}ms)");
-                        InitializeFrameProcessing();
+                        // Reaching this means ffmpeg printed nothing we recognise in timeoutMs -
+                        // no "Input #0", no stream line, no frame counter. We initialize blind and
+                        // hope, but it is a strong signal the device open itself never completed,
+                        // so say so plainly rather than leaving a bare "Initialized" line behind.
+                        Tools.Logger.VideoLog.Log(this,
+                            $"FFMPEG no recognisable output from ffmpeg after {timeoutMs}ms for '{VideoConfig.DeviceName}' - " +
+                            $"the device open has not completed (input opened: {sawFfmpegInputOpen}). Initializing blind.");
+                        InitializeFrameProcessing($"blind timeout fallback, {timeoutMs}ms");
                     }
                 });
 
@@ -672,69 +735,90 @@ namespace FfmpegMediaPlatform
 
         protected abstract ProcessStartInfo GetProcessStartInfo();
 
-        protected virtual void Run()
+        protected virtual void Run(int generation)
         {
             Tools.Logger.VideoLog.LogDebugCall(this, "Camera reading thread started");
             bool loggedInit = false;
             int consecutiveErrors = 0;
             const int maxConsecutiveErrors = 5;
-            
-            while(run)
+
+            while(run && generation == runGeneration)
             {
                 try
                 {
+                    // Snapshot the process once per iteration. StopProcessAsync nulls the field
+                    // from another thread, and this loop cannot be interrupted mid-read, so
+                    // reading the field repeatedly races and throws NullReferenceException.
+                    Process p = process;
+                    if (p == null)
+                    {
+                        Tools.Logger.VideoLog.LogDebugCall(this, "FFmpeg process is gone, stopping camera reading thread");
+                        Connected = false;
+                        break;
+                    }
+
+                    if (ProcessHasExited(p))
+                    {
+                        LogProcessExitOnce(p);
+                        Connected = false;
+                        break;
+                    }
+
                     if (!inited)
                     {
                         System.Threading.Thread.Sleep(10); // Prevent busy waiting
                         continue;
                     }
-                    
+
                     if (!loggedInit)
                     {
                         Tools.Logger.VideoLog.LogDebugCall(this, "Camera reading thread initialized, running at native camera frame rate");
                         loggedInit = true;
                         consecutiveErrors = 0; // Reset error counter on successful init
                     }
-                    
-                    // Check if process is still running
-                    if (process == null || process.HasExited)
-                    {
-                        Tools.Logger.VideoLog.LogDebugCall(this, "FFmpeg process has exited, stopping camera reading thread");
-                        Connected = false;
-                        break;
-                    }
-                    
-                    Stream stream = process.StandardOutput.BaseStream;
+
+                    Stream stream = p.StandardOutput.BaseStream;
                     if (stream == null)
                     {
                         Tools.Logger.VideoLog.LogDebugCall(this, "StandardOutput stream is null, waiting...");
                         Thread.Sleep(100);
                         continue;
                     }
-                    
+
                     int totalBytesRead = 0;
                     int bytesToRead = buffer.Length;
-                    
+
                     // Keep reading until we have a complete frame
-                    while (totalBytesRead < bytesToRead && run && !process.HasExited)
+                    while (totalBytesRead < bytesToRead && run && generation == runGeneration && !ProcessHasExited(p))
                     {
                         int bytesRead = stream.Read(buffer, totalBytesRead, bytesToRead - totalBytesRead);
                         if (bytesRead == 0)
                         {
                             // End of stream or process ended
-                            if (process == null || process.HasExited)
+                            if (ProcessHasExited(p))
                             {
-                                Tools.Logger.VideoLog.LogDebugCall(this, "FFmpeg process ended during read");
+                                LogProcessExitOnce(p);
                                 break;
                             }
                             Thread.Sleep(10); // Brief pause before retry
                             continue;
                         }
                         totalBytesRead += bytesRead;
+                        totalBytesEverRead += bytesRead;
                     }
-                    
+
                     if (totalBytesRead == bytesToRead)
                     {
+                        // First frame is the moment the whole chain is proven working end to end.
+                        // Worth one Notice line - it is the difference between "camera is fine" and
+                        // "camera never produced anything" when reading a user's log.
+                        if (!loggedFirstFrame)
+                        {
+                            loggedFirstFrame = true;
+                            double secs = (DateTime.Now - processStartedAt).TotalSeconds;
+                            Tools.Logger.VideoLog.Log(this, $"FFMPEG first frame received from '{VideoConfig.DeviceName}' after {secs:F2}s ({bytesToRead} bytes, {width}x{height})");
+                        }
+
                         // Log only every 1800 frames to reduce spam (every 30 seconds at 60fps)
                         if (FrameProcessNumber % 1800 == 0)
                         {
@@ -780,8 +864,114 @@ namespace FfmpegMediaPlatform
                     Thread.Sleep(100); // Brief pause before retry
                 }
             }
-            
+
             Tools.Logger.VideoLog.LogDebugCall(this, "Camera reading thread finished");
+
+            // A reader thread that ends having never seen a byte is the signature of a device that
+            // was opened but never delivered. Say it once, at Notice, with the numbers to prove it.
+            if (totalBytesEverRead == 0 && generation == runGeneration)
+            {
+                double secs = (DateTime.Now - processStartedAt).TotalSeconds;
+                Tools.Logger.VideoLog.Log(this,
+                    $"FFMPEG reader for '{VideoConfig.DeviceName}' ended after {secs:F1}s having read 0 bytes " +
+                    $"(ffmpeg opened its input: {sawFfmpegInputOpen}). No video was ever produced by this device.");
+            }
+        }
+
+        /// <summary>
+        /// HasExited throws once the Process has been disposed, which the stop path can do
+        /// underneath a reader thread that is still winding down. Treat that as "exited".
+        /// </summary>
+        protected static bool ProcessHasExited(Process p)
+        {
+            try
+            {
+                return p == null || p.HasExited;
+            }
+            catch (InvalidOperationException)
+            {
+                return true;
+            }
+            catch (SystemException)
+            {
+                return true;
+            }
+        }
+
+        private void LogProcessExitOnce(Process p)
+        {
+            if (loggedProcessExit)
+                return;
+
+            loggedProcessExit = true;
+
+            string exitCode;
+            try
+            {
+                exitCode = p.ExitCode.ToString();
+            }
+            catch
+            {
+                exitCode = "unknown";
+            }
+
+            double secs = (DateTime.Now - processStartedAt).TotalSeconds;
+            Tools.Logger.VideoLog.Log(this,
+                $"FFMPEG process for '{VideoConfig.DeviceName}' exited after {secs:F1}s with code {exitCode}, " +
+                $"having produced {totalBytesEverRead} bytes. See the FFMPEG: lines above for the reason.");
+        }
+
+        /// <summary>
+        /// Which ffmpeg stderr lines are worth a Notice-level log line. Deliberately narrow: the
+        /// banner, the per-library version list and the frame counter are all noise, but anything
+        /// describing the input, the negotiated stream, or a failure needs to reach a support log.
+        /// </summary>
+        private static bool IsDiagnosticFfmpegLine(string line)
+        {
+            if (string.IsNullOrWhiteSpace(line))
+                return false;
+
+            // Banner and build configuration - always present, never informative. Matched by
+            // content rather than by leading whitespace: "  Stream #0:0: Video: ..." is indented
+            // too, and it is the single most useful line ffmpeg prints.
+            string trimmed = line.TrimStart();
+            if (trimmed.StartsWith("ffmpeg version")
+                || trimmed.StartsWith("built with")
+                || trimmed.StartsWith("configuration:")
+                || Regex.IsMatch(trimmed, @"^lib[a-z]+\s+\d+\."))
+            {
+                return false;
+            }
+
+            // Periodic progress. The first frame is logged from the reader thread instead.
+            if (line.Contains("frame=") && line.Contains("fps="))
+                return false;
+
+            if (line.Contains("Last message repeated") || line.Contains("unable to decode APP fields"))
+                return false;
+
+            // What the input actually negotiated, and anything that went wrong with it.
+            string[] interesting =
+            {
+                "Input #", "Output #", "Stream #", "Stream mapping",
+                "error", "Error", "ERROR",
+                "denied", "Denied", "permission", "Permission",
+                "Invalid", "invalid argument",
+                "not supported", "Unsupported", "unsupported",
+                "No such", "not found", "Could not", "could not",
+                "Unknown", "unknown",
+                "failed", "Failed", "Cannot", "cannot",
+                "busy", "Busy", "in use",
+                "Selected", "Supported modes",
+            };
+
+            foreach (string token in interesting)
+            {
+                if (line.Contains(token))
+                    return true;
+            }
+
+            return false;
         }
 
         /// <summary>

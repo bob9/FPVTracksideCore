@@ -64,13 +64,20 @@ namespace Sound
             // director muted the tool that manages this file, restarted, and
             // heard two voices calling every lap.
             mute = volume <= 0;
+            System.IO.File.AppendAllText("/tmp/macspeaker.log",
+                DateTime.Now.ToString("HH:mm:ss.fff") +
+                $" SpeechManager ctor: voice={voice} volume={volume} mute={mute}\n");
             this.platformTools = platformTools;
             speaker = platformTools.CreateSpeaker(voice);
 
             if (speaker != null)
             {
                 ttsQueue = new WorkQueue("Speecher TTS");
-                Muted = false;
+                // Respects the volume-derived mute above. This line used to be
+                // an unconditional Muted = false, which quietly undid any
+                // startup mute five lines after it was decided — the reason
+                // TextToSpeechVolume=0 never silenced anything.
+                Muted = mute;
             }
             else
             {

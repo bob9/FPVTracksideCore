@@ -54,6 +54,16 @@ namespace Sound
         public SpeechManager(PlatformTools platformTools, string voice, int volume)
         {
             Voice = voice;
+            // Volume zero IS the mute, applied here where it cannot be lost.
+            //
+            // It used to rely on two things that both fail on the Mac build:
+            // EventLayer assigns MuteTTS through a setter that silently returns
+            // while speechManager is still null (an init-order swallow), and the
+            // per-call speaker.SetVolume(0) lands on MacSpeaker's empty stub.
+            // Net effect: TextToSpeechVolume=0 never silenced macOS — the race
+            // director muted the tool that manages this file, restarted, and
+            // heard two voices calling every lap.
+            mute = volume <= 0;
             this.platformTools = platformTools;
             speaker = platformTools.CreateSpeaker(voice);
 
@@ -147,6 +157,33 @@ namespace Sound
         /// platform speaker as its fallback, so a phrase it cannot assemble is
         /// still spoken live rather than dropped.
         /// </summary>
+        /// <summary>
+        /// Speaks calls generated on demand instead of from pre-made clips.
+        ///
+        /// Layered ON TOP of whatever is already in place — usually the voice
+        /// pack — so anything the generator cannot say still gets spoken. That
+        /// ordering is deliberate: live generation is the better experience but
+        /// the newer, less proven path, and a race must never go quiet because
+        /// a model failed to load.
+        /// </summary>
+        public bool UseLiveSpeech(AI.LiveSpeechBackend backend)
+        {
+            if (backend == null || !backend.Ready) return false;
+
+            if (speaker == null)
+            {
+                speaker = platformTools.CreateSpeaker(Voice);
+            }
+
+            AI.LiveSpeechSpeaker live = new AI.LiveSpeechSpeaker(backend, speaker);
+            LiveSpeech = live;
+            speaker = live;
+            return true;
+        }
+
+        /// <summary>The live generator, when one is running.</summary>
+        public AI.LiveSpeechSpeaker LiveSpeech { get; private set; }
+
         public void UseVoicePack(AI.VoicePack pack)
         {
             if (pack == null)

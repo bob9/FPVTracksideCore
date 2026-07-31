@@ -141,22 +141,23 @@ namespace Sound
                 return;
             }
 
-            if (Muted)
+            // Muted requests flow through Speak like any other, on purpose.
+            //
+            // The old short-circuit fired OnFinish immediately and skipped Speak
+            // entirely, which broke two things nobody connected to "mute": the
+            // race-start countdown COLLAPSED (the start tone is chained off this
+            // callback, so "in less than five" became zero seconds), and the
+            // SOUNDLOG TTS line was never written — which external tools tail to
+            // know what the app is saying. A muted broadcaster still follows the
+            // running order; it just has the fader down. Speak() logs, then
+            // holds the request for the estimated spoken duration, and only the
+            // audio itself is suppressed.
+            SoundWorkItem soundWorkItem = new SoundWorkItem()
             {
-                if (speech.OnFinish != null)
-                {
-                    ttsQueue.Enqueue(speech.OnFinish);
-                }
-            }
-            else
-            {
-                SoundWorkItem soundWorkItem = new SoundWorkItem()
-                {
-                    Action = () => { Speak(speech); },
-                    Priority = speech.Priority
-                };
-                ttsQueue.Enqueue(soundWorkItem);
-            }
+                Action = () => { Speak(speech); },
+                Priority = speech.Priority
+            };
+            ttsQueue.Enqueue(soundWorkItem);
         }
 
         /// <summary>
@@ -244,6 +245,15 @@ namespace Sound
                         {
                             speaker.Speak(text);
                         }
+                    }
+                    else if (!string.IsNullOrEmpty(text))
+                    {
+                        // The time the words would have taken, without the words —
+                        // so everything chained off OnFinish (the start tone above
+                        // all) keeps its real-world pacing while muted. ~14 chars
+                        // per second matches the system voice within a beat.
+                        double secs = Math.Clamp(text.Length / 14.0, 0.5, 10.0);
+                        System.Threading.Thread.Sleep(TimeSpan.FromSeconds(secs));
                     }
                 }
                 catch (OperationCanceledException)

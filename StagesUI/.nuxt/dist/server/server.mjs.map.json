@@ -1,0 +1,1 @@
+{"file":"server.mjs","mappings":";AACA,IAAI,0BAA0B,CAAC","names":[],"sources":["../../../node_modules/nuxt/dist/app/entry-spa.js"],"sourcesContent":["//#region src/app/entry-spa.ts\nvar entry_spa_default = () => {};\n//#endregion\nexport { entry_spa_default as default };\n"],"version":3}

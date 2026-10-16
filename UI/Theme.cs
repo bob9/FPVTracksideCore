@@ -29,6 +29,10 @@ namespace UI
         public string FontFamily { get; set; }
         public ToolTexture Background { get; set; }
         public ToolTexture FPVTracksideLogo { get; set; }
+
+        // The open tab's background and text colour. Null (the default) keeps the
+        // old look: the hover colour over the tab.
+        public PanelTheme TabSelected { get; set; }
         public ToolTexture RaceStartGraphic { get; set; }
 
         public ToolColor TextAlt { get; set; }
@@ -272,12 +276,12 @@ namespace UI
         // Give a tab strip this theme's open-tab look, if it has one.
         public void ApplySelected(Composition.Nodes.TabButtonsNode tabButtons)
         {
-            if (Tabs?.Selected == null)
+            if (TabSelected?.Background == null)
                 return;
 
-            tabButtons.SelectedBackground = Tabs.Selected;
-            if (Tabs.SelectedText != null)
-                tabButtons.SelectedText = Tabs.SelectedText.XNA;
+            tabButtons.SelectedBackground = TabSelected.Background;
+            if (TabSelected.Text != null)
+                tabButtons.SelectedText = TabSelected.Text.XNA;
         }
 
         private void Upgrade()
@@ -456,10 +460,6 @@ namespace UI
         public ToolTexture Background { get; set; }
         public ToolTexture Foreground { get; set; }
         public ToolColor Text { get; set; }
-
-        // The selected item (eg the open tab). Null keeps the old look: the hover colour over it.
-        public ToolTexture Selected { get; set; }
-        public ToolColor SelectedText { get; set; }
 
         public PanelTheme()
         {

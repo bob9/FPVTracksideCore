@@ -132,9 +132,15 @@ namespace UI
                 theme.Tabs.Foreground = TabForeground.ToToolTexture(rawTextureCache);
                 theme.Tabs.Text = TabText.ToToolColor(rawTextureCache);
                 if (TabSelected != null)
-                    theme.Tabs.Selected = TabSelected.ToToolTexture(rawTextureCache);
-                if (TabSelectedText != null)
-                    theme.Tabs.SelectedText = TabSelectedText.ToToolColor(rawTextureCache);
+                {
+                    ToolTexture selected = TabSelected.ToToolTexture(rawTextureCache);
+                    theme.TabSelected = new PanelTheme()
+                    {
+                        Background = selected,
+                        Foreground = selected,
+                        Text = TabSelectedText != null ? TabSelectedText.ToToolColor(rawTextureCache) : new ToolColor(255, 255, 255)
+                    };
+                }
 
                 theme.Panel = PanelBackground.ToToolTexture(rawTextureCache);
                 theme.PanelAlt = PanelForeground.ToToolTexture(rawTextureCache);

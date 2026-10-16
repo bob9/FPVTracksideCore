@@ -170,7 +170,7 @@ namespace UI.Nodes
             if (ColorNode != null && Value != null)
             {
                 ToolColor value = PropertyInfo.GetValue(Object, null) as ToolColor;
-                ColorNode.Color = value.XNA;
+                ColorNode.Color = value != null ? value.XNA : Color.Transparent;
             }
         }
     }

@@ -106,7 +106,7 @@ namespace WindowsPlatform
             System.Windows.FontWeight fw = style.Bold ? System.Windows.FontWeights.Bold : System.Windows.FontWeights.Medium;
             System.Windows.FontStyle fs = style.Italic ? System.Windows.FontStyles.Italic : System.Windows.FontStyles.Normal;
 
-            FontFamily ff = new FontFamily(style.Font);
+            FontFamily ff = WinTextureHelper.GetFontFamily(style.Font, style.Bold, style.Italic);
             Typeface tf = new Typeface(ff, fs, fw, System.Windows.FontStretches.Normal);
 
             Color color = Color.FromArgb(style.TextColor.A, style.TextColor.R, style.TextColor.G, style.TextColor.B);

@@ -48,6 +48,10 @@ namespace UI
         public TextureRegion TabsBackground { get; set; }
         public TextureRegion TabForeground { get; set; }
         public TextureColor TabText { get; set; }
+
+        // Optional: the open tab's background and text. Without them the open tab is drawn in the hover colour.
+        public TextureRegion TabSelected { get; set; }
+        public TextureColor TabSelectedText { get; set; }
         public TextureColor ScrollBar { get; set; }
 
 
@@ -127,6 +131,10 @@ namespace UI
                 theme.Tabs.Background = TabsBackground.ToToolTexture(rawTextureCache);
                 theme.Tabs.Foreground = TabForeground.ToToolTexture(rawTextureCache);
                 theme.Tabs.Text = TabText.ToToolColor(rawTextureCache);
+                if (TabSelected != null)
+                    theme.Tabs.Selected = TabSelected.ToToolTexture(rawTextureCache);
+                if (TabSelectedText != null)
+                    theme.Tabs.SelectedText = TabSelectedText.ToToolColor(rawTextureCache);
 
                 theme.Panel = PanelBackground.ToToolTexture(rawTextureCache);
                 theme.PanelAlt = PanelForeground.ToToolTexture(rawTextureCache);

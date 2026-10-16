@@ -215,6 +215,16 @@ namespace UI
 
             DirectoryInfo themesDirectory = new DirectoryInfo(Path.Combine(workingDirectory.FullName, "themes"));
 
+            // Fonts a theme ships with: the shared themes folder, then each theme's own.
+            Composition.Text.FontFiles.AddDirectory(themesDirectory);
+            if (themesDirectory.Exists)
+            {
+                foreach (DirectoryInfo themeDirectory in themesDirectory.GetDirectories())
+                {
+                    Composition.Text.FontFiles.AddDirectory(themeDirectory);
+                }
+            }
+
             themes.AddRange(Load(themesDirectory, gd));
 
             Themes = themes.ToList();
@@ -257,6 +267,17 @@ namespace UI
 
             LocaliseFilenames(Current.Directory, Current);
             Composition.Text.Style.DefaultFont = Current.FontFamily;
+        }
+
+        // Give a tab strip this theme's open-tab look, if it has one.
+        public void ApplySelected(Composition.Nodes.TabButtonsNode tabButtons)
+        {
+            if (Tabs?.Selected == null)
+                return;
+
+            tabButtons.SelectedBackground = Tabs.Selected;
+            if (Tabs.SelectedText != null)
+                tabButtons.SelectedText = Tabs.SelectedText.XNA;
         }
 
         private void Upgrade()
@@ -435,6 +456,10 @@ namespace UI
         public ToolTexture Background { get; set; }
         public ToolTexture Foreground { get; set; }
         public ToolColor Text { get; set; }
+
+        // The selected item (eg the open tab). Null keeps the old look: the hover colour over it.
+        public ToolTexture Selected { get; set; }
+        public ToolColor SelectedText { get; set; }
 
         public PanelTheme()
         {

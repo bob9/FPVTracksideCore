@@ -35,6 +35,7 @@ namespace UI.Nodes
             ToolTexture buttonBackground = new ToolTexture(panel.R, panel.G, panel.B, panel.A);
 
             TabButtonsNode tabButtons = new TabButtonsNode(ToolTexture.Transparent, buttonBackground, Theme.Current.Hover.XNA, Theme.Current.Tabs.Text.XNA);
+            Theme.Current.ApplySelected(tabButtons);
             tabButtons.RelativeBounds = new RectangleF(0, 0, 1, 0.035f);
             tabButtons.MinimumSlots = 6;
             tabButtons.Padding = 0.05f;

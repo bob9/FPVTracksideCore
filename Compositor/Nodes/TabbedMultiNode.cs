@@ -119,6 +119,7 @@ namespace Composition.Nodes
                 if (mapBack.TryGetValue(Showing, out oldtbn))
                 {
                     oldtbn.BackgroundNode.SetToolTexture(TabButtonsNode.ButtonBackground);
+                    oldtbn.TextNode.Tint = Color.White;
                 }
             }
 
@@ -129,7 +130,15 @@ namespace Composition.Nodes
                 TextButtonNode newtbn;
                 if (mapBack.TryGetValue(node, out newtbn))
                 {
-                    newtbn.Background = TabButtonsNode.HoverCover;
+                    if (TabButtonsNode.SelectedBackground != null)
+                    {
+                        newtbn.BackgroundNode.SetToolTexture(TabButtonsNode.SelectedBackground);
+                        newtbn.TextNode.Tint = TabButtonsNode.SelectedText;
+                    }
+                    else
+                    {
+                        newtbn.Background = TabButtonsNode.HoverCover;
+                    }
                 }
             }
         }
@@ -141,6 +150,10 @@ namespace Composition.Nodes
 
         public ToolTexture ButtonBackground { get; private set; }
         public Color HoverCover { get; private set; }
+
+        // The open tab's background and text colour. Null background = the hover colour over the button.
+        public ToolTexture SelectedBackground { get; set; }
+        public Color SelectedText { get; set; } = Color.White;
         private Color textColor;
 
         // Lay the buttons out as if there were at least this many, so a few

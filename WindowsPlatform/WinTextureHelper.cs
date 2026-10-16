@@ -13,11 +13,23 @@ namespace WindowsPlatform
 {
     public static class WinTextureHelper
     {
+        // A font shipped in a theme's folder (see Composition.Text.FontFiles), else the system's.
+        public static System.Windows.Media.FontFamily GetFontFamily(string family, bool bold, bool italic)
+        {
+            string file = Composition.Text.FontFiles.Find(family, bold, italic);
+            if (file != null)
+            {
+                Uri folder = new Uri(System.IO.Path.GetDirectoryName(file) + System.IO.Path.DirectorySeparatorChar);
+                return new System.Windows.Media.FontFamily(folder, "./#" + family);
+            }
+            return new System.Windows.Media.FontFamily(family);
+        }
+
 
         public static Texture2D TextToTexture(GraphicsDevice graphics, Color textColor, string fontFamily, float fontPoint, string text, int maxSize = 2000)
         {
             System.Windows.Media.DrawingVisual drawingVisual = new System.Windows.Media.DrawingVisual();
-            System.Windows.Media.FontFamily ff = new System.Windows.Media.FontFamily(fontFamily);
+            System.Windows.Media.FontFamily ff = GetFontFamily(fontFamily, false, false);
             System.Windows.Media.Typeface tf = new System.Windows.Media.Typeface(ff, System.Windows.FontStyles.Normal, System.Windows.FontWeights.Medium, System.Windows.FontStretches.Normal);
 
             System.Windows.Media.Color color = System.Windows.Media.Color.FromArgb(textColor.A, textColor.R, textColor.G, textColor.B);

@@ -190,7 +190,12 @@ namespace Composition.Text
                 var key = (style.Font, style.Bold, style.Italic);
                 if (!typefaces.TryGetValue(key, out typeface))
                 {
-                    typeface = SKTypeface.FromFamilyName(style.Font, weight, SKFontStyleWidth.Normal, slant) ?? SKTypeface.Default;
+                    // A font shipped in a theme's folder, else the system's.
+                    string file = FontFiles.Find(style.Font, style.Bold, style.Italic);
+                    if (file != null)
+                        typeface = SKTypeface.FromFile(file);
+                    if (typeface == null)
+                        typeface = SKTypeface.FromFamilyName(style.Font, weight, SKFontStyleWidth.Normal, slant) ?? SKTypeface.Default;
                     typefaces[key] = typeface;
                 }
             }

@@ -109,6 +109,7 @@ namespace Composition.Nodes
             AddChild(root);
 
             selectedHover = new ColorNode(buttonHover);
+            selectedHover.StyleAsHover();
             AddChild(selectedHover);
 
             ButtonBackground = buttonBackground;
@@ -616,6 +617,7 @@ namespace Composition.Nodes
             container.AddChild(textNode);
 
             ColorNode searchBackground = new ColorNode(ButtonBackground);
+            searchBackground.StyleAsInput();
             searchBackground.RelativeBounds = new RectangleF(0.3f, 0, 0.7f, 1);
             container.AddChild(searchBackground);
 
@@ -1177,6 +1179,7 @@ namespace Composition.Nodes
             AddChild(container);
 
             textBackgroundNode = new ColorNode(textBackground);
+            textBackgroundNode.StyleAsInput();
             container.AddChild(textBackgroundNode);
 
             TextValue = new TextEditNode("", textColor);
@@ -1188,6 +1191,12 @@ namespace Composition.Nodes
             TextValue.AllowsUnicode = allowUnicode;
 
             container.AddChild(TextValue);
+
+            // A rounded input keeps its text off its edges.
+            if (ShapeStyle.InputRadius > 0)
+            {
+                TextValue.RelativeBounds = new RectangleF(0.012f, 0, 0.976f, 1);
+            }
 
             AlignHorizontally(0.01f, Children.ToArray());
 
@@ -1233,6 +1242,7 @@ namespace Composition.Nodes
             : base(obj, pi, textColor)
         {
             ColorNode textBackgroundNode = new ColorNode(background);
+            textBackgroundNode.StyleAsInput();
             AddChild(textBackgroundNode);
 
             Value = new PasswordNode("", textColor);

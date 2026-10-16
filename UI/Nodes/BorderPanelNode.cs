@@ -35,6 +35,19 @@ namespace UI.Nodes
 
         protected virtual void Setup(ColorNode panel, Color borderColor)
         {
+            bool rounded = ShapeStyle.PanelRadius > 0;
+            if (rounded)
+            {
+                // A rounded panel: its border becomes an outline that follows the corners.
+                panel.StyleAsPanel();
+                if (ShapeStyle.Ring.A == 0)
+                {
+                    panel.RingColor = borderColor;
+                    panel.RingWidth = 1;
+                }
+                borderColor = Color.Transparent;
+            }
+
             BorderNode = new BorderNode(borderColor);
             AddChild(BorderNode);
 
@@ -43,7 +56,9 @@ namespace UI.Nodes
 
             pn.AddChild(panel);
 
-            Inner = new PaddingNode(5, 5);
+            // Rounded corners need more room before the contents start.
+            int padding = rounded ? 12 : 5;
+            Inner = new PaddingNode(padding, padding);
             panel.AddChild(Inner);
         }
     }
@@ -73,7 +88,7 @@ namespace UI.Nodes
 
         protected override void Setup(ColorNode panel, Color borderColor)
         {
-            if (Theme.Current.Shadows)
+            if (Theme.Current.Shadows && ShapeStyle.PanelRadius <= 0)
             {
                 ShadowNode = new ShadowNode();
                 AddChild(ShadowNode);

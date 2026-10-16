@@ -297,7 +297,34 @@ namespace UI
 
         protected virtual EventSelectorEditor CreateEventSelectorEditor()
         {
-            return new EventSelectorEditor(Banner, Profile);
+            return new EventSelectorEditor(ThemedBanner(), Profile);
+        }
+
+        private Texture2D themedBanner;
+
+        // The current theme's own banner (img/banner.png in the theme), else the built-in one.
+        protected Texture2D ThemedBanner()
+        {
+            string dir = TextureCache.ImageOverrideDirectory;
+            if (dir == null)
+                return Banner;
+
+            string filename = System.IO.Path.Combine(dir, "banner.png");
+            if (!System.IO.File.Exists(filename))
+                return Banner;
+
+            if (themedBanner == null)
+            {
+                try
+                {
+                    themedBanner = TextureHelper.LoadTexture(GraphicsDevice, filename, true);
+                }
+                catch
+                {
+                    return Banner;
+                }
+            }
+            return themedBanner;
         }
 
         public virtual void ShowWelcomeSetup()

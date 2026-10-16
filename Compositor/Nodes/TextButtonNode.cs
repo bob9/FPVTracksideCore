@@ -82,6 +82,9 @@ namespace Composition.Nodes
             HoverNode = new HoverNode(hover);
             HoverNode.OnHover += HoverNode_OnHover;
             AddChild(HoverNode);
+
+            BackgroundNode.StyleAsButton();
+            HoverNode.Shape.StyleAsButton();
         }
 
         private void HoverNode_OnHover(Input.MouseInputEvent mie)

@@ -16,6 +16,9 @@ namespace Composition.Nodes
 
         private ColorNode hover;
 
+        // The highlight itself, to shape it (rounded, inset) like what it covers.
+        public ColorNode Shape { get { return hover; } }
+
         public bool Enabled { get; set; }
 
         public event MouseInputDelegate OnHover;
@@ -25,6 +28,7 @@ namespace Composition.Nodes
         public HoverNode(Color hoverColor)
         {
             hover = new ColorNode(hoverColor);
+            hover.StyleAsHover();
             AddChild(hover);
 
             hover.Visible = false;

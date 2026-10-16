@@ -79,6 +79,13 @@ namespace Composition.Nodes
 
             Width = 10;
 
+            // A rounded interface gets a pill of a scroll bar.
+            if (ShapeStyle.Rounded)
+            {
+                CornerRadius = 100;
+                InsetX = 2;
+            }
+
             Scrollable = scrollable;
             ScrollType = scrollDirection;
 

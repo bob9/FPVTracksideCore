@@ -43,7 +43,43 @@ namespace UI.Nodes
 
             background.Inner.AddChild(root);
 
+            // A rounded panel keeps the editor's contents in from its corners.
+            if (Composition.ShapeStyle.PanelRadius > 0)
+            {
+                RemoveChild(mainDock);
+                PaddingNode padding = new PaddingNode(16, 12);
+                padding.AddChild(mainDock);
+                AddChild(padding, 1);
+            }
+
             Scale(0.6f, 0.9f);
+
+            StylePrimary(okButton);
+        }
+
+        // In a rounded theme the button that completes a dialog is drawn in the
+        // theme's accent (the open-tab colour), so the main action stands out.
+        public static void StylePrimary(TextButtonNode button)
+        {
+            if (button == null || Composition.ShapeStyle.ButtonRadius <= 0)
+                return;
+
+            if (Composition.ShapeStyle.Primary.A > 0)
+            {
+                button.Background = Composition.ShapeStyle.Primary;
+                button.TextNode.Tint = Composition.ShapeStyle.PrimaryText;
+                return;
+            }
+
+            PanelTheme accent = Theme.Current.TabSelected;
+            if (accent?.Background == null)
+                return;
+
+            button.Background = accent.Background.XNA;
+            if (accent.Text != null)
+            {
+                button.TextNode.Tint = accent.Text.XNA;
+            }
         }
 
         public void AlignVisibleButtons()

@@ -43,7 +43,7 @@ namespace UI.Nodes
 
         private AnimatedRelativeNode pilotInfoContainer;
         private ChannelPilotNameNode pilotNameNode;
-        private ImageNode pbBackground;
+        private ColorNode pbBackground;
         private PBContainerNode PBNode;
 
         protected AnimatedRelativeNode resultContainer;
@@ -331,6 +331,14 @@ namespace UI.Nodes
             AddChild(DisplayNode);
             AddChild(LapsNode);
 
+            if (ShapeStyle.Modern)
+            {
+                // The channel colour runs along the top of the tile.
+                ColorNode edge = new ColorNode(ChannelColor);
+                edge.RelativeBounds = new RectangleF(0, 0, 1, 0.012f);
+                AddChild(edge);
+            }
+
             //WidgetManager = new WidgetManagerNode();
             //DisplayNode.AddChild(WidgetManager);
 
@@ -417,6 +425,7 @@ namespace UI.Nodes
 
             pbBackground = new ColorNode(Theme.Current.PilotViewTheme.PBBackground);
             pbBackground.KeepAspectRatio = false;
+            pbBackground.StyleAsChip();
             pbBackground.Alpha = pilotAlpha;
             pbBackground.RelativeBounds = new RectangleF(0.0f, pilotNameNode.RelativeBounds.Bottom, pilotNameNode.RelativeBounds.Width * 0.66f, 0.35f);
             pilotInfoContainer.AddChild(pbBackground);
@@ -1201,6 +1210,7 @@ namespace UI.Nodes
             KeepAspectRatio = false;
             Alpha = pilotAlpha;
             Tint = channelColor;
+            StyleAsChip();
 
             pilotName = new TextNode("", Theme.Current.PilotViewTheme.PilotOverlayText.XNA);
             pilotName.RelativeBounds = new RectangleF(0, 0.15f, 0.87f, 0.7f);

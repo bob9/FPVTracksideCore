@@ -31,6 +31,7 @@ namespace Composition.Nodes
             this.onOk = onOk;
 
             ColorNode backgroundNode = new ColorNode(background);
+            backgroundNode.StyleAsPanel();
             AddChild(backgroundNode);
 
             messageNode = new TextNode(message, text);
@@ -51,7 +52,10 @@ namespace Composition.Nodes
                 OK();
             };
 
-            AddChild(new ShadowNode());
+            if (!backgroundNode.Shaped)
+            {
+                AddChild(new ShadowNode());
+            }
         }
 
 

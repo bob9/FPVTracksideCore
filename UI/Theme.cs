@@ -33,6 +33,10 @@ namespace UI
         // The open tab's background and text colour. Null (the default) keeps the
         // old look: the hover colour over the tab.
         public PanelTheme TabSelected { get; set; }
+
+        [System.Xml.Serialization.XmlIgnore]
+        [System.ComponentModel.Browsable(false)]
+        public ThemeStyle Style { get; set; }
         public ToolTexture RaceStartGraphic { get; set; }
 
         public ToolColor TextAlt { get; set; }
@@ -237,7 +241,15 @@ namespace UI
 
             if (ApplicationProfileSettings.Instance != null)
             {
-                Current = Themes.FirstOrDefault(t => t.Name == ApplicationProfileSettings.Instance.Theme);
+                string wanted = ApplicationProfileSettings.Instance.Theme;
+
+                // The first Seeder preview became Seeder 2.0; its folder can't be updated in place.
+                if (wanted == "Seeder" && Themes.Any(t => t.Name == "Seeder 2.0"))
+                {
+                    wanted = "Seeder 2.0";
+                }
+
+                Current = Themes.FirstOrDefault(t => t.Name == wanted);
             }
 
             if (Current == null)
@@ -271,6 +283,13 @@ namespace UI
 
             LocaliseFilenames(Current.Directory, Current);
             Composition.Text.Style.DefaultFont = Current.FontFamily;
+
+            Composition.ShapeStyle.Reset();
+            Current.Style?.Apply();
+
+            // A theme can replace any of the icons in img/ with its own of the same name.
+            DirectoryInfo themeImages = Current.Directory != null ? new DirectoryInfo(Path.Combine(Current.Directory.FullName, "img")) : null;
+            TextureCache.ImageOverrideDirectory = themeImages != null && themeImages.Exists ? themeImages.FullName : null;
         }
 
         // Give a tab strip this theme's open-tab look, if it has one.

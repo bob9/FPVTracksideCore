@@ -47,6 +47,12 @@ namespace Composition.Nodes
 
         public bool ReloadFromFile { get; set; }
 
+        // Draw the image as nine slices: the outer Slice pixels of the source are
+        // corners and edges that keep their size (scaled by SliceScale) and only
+        // the middle stretches, so a rounded image stays round at any size.
+        public int Slice { get; set; }
+        public float SliceScale { get; set; }
+
         public ImageNode()
         {
             ReloadFromFile = false;
@@ -54,6 +60,7 @@ namespace Composition.Nodes
             CropToFit = false;
             sharedTexture = false;
             Tint = Color.White;
+            SliceScale = 1;
             RelativeSourceBounds = new RectangleF(0, 0, 1, 1);
             SourceBounds = new Rectangle();
         }
@@ -200,7 +207,7 @@ namespace Composition.Nodes
 
                 try
                 {
-                    id.Draw(texture, SourceBounds, Bounds, Tint, alpha);
+                    DrawImage(id, alpha);
                 }
                 catch
                 {
@@ -215,6 +222,48 @@ namespace Composition.Nodes
             DebugTimer.DebugEndTime(this);
 
             base.Draw(id, parentAlpha);
+        }
+
+        protected virtual void DrawImage(Drawer id, float alpha)
+        {
+            if (Slice > 0)
+            {
+                DrawSliced(id, texture, SourceBounds, BoundsF, Slice, Slice * SliceScale * ShapeStyle.Scale(id), Tint, alpha);
+            }
+            else
+            {
+                id.Draw(texture, SourceBounds, Bounds, Tint, alpha);
+            }
+        }
+
+        public static void DrawSliced(Drawer id, Texture2D texture, Rectangle source, RectangleF destF, int slice, float sliceScreen, Color tint, float alpha)
+        {
+            Rectangle dest = new Rectangle((int)Math.Round(destF.X), (int)Math.Round(destF.Y), (int)Math.Round(destF.Width), (int)Math.Round(destF.Height));
+
+            int s = Math.Min(slice, Math.Min(source.Width, source.Height) / 2);
+            int d = (int)Math.Round(Math.Min(sliceScreen, Math.Min(dest.Width, dest.Height) / 2.0f));
+            if (s <= 0 || d <= 0)
+            {
+                id.Draw(texture, source, dest, tint, alpha);
+                return;
+            }
+
+            int[] sx = { source.X, source.X + s, source.Right - s, source.Right };
+            int[] sy = { source.Y, source.Y + s, source.Bottom - s, source.Bottom };
+            int[] dx = { dest.X, dest.X + d, dest.Right - d, dest.Right };
+            int[] dy = { dest.Y, dest.Y + d, dest.Bottom - d, dest.Bottom };
+
+            for (int row = 0; row < 3; row++)
+            {
+                for (int col = 0; col < 3; col++)
+                {
+                    Rectangle src = new Rectangle(sx[col], sy[row], sx[col + 1] - sx[col], sy[row + 1] - sy[row]);
+                    Rectangle dst = new Rectangle(dx[col], dy[row], dx[col + 1] - dx[col], dy[row + 1] - dy[row]);
+                    if (src.Width <= 0 || src.Height <= 0 || dst.Width <= 0 || dst.Height <= 0)
+                        continue;
+                    id.Draw(texture, src, dst, tint, alpha);
+                }
+            }
         }
 
         public void SetFilename(string filename)
@@ -232,6 +281,7 @@ namespace Composition.Nodes
         {
             SetFilename(tt.TextureFilename);
             SourceBounds = tt.Region;
+            Slice = tt.Slice;
         }
     }
 }

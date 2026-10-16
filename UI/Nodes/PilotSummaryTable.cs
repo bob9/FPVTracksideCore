@@ -75,6 +75,22 @@ namespace UI.Nodes
 
             panelNode.AddChild(rows);
 
+            if (ShapeStyle.Modern)
+            {
+                // A card: a title, quiet column headings, rows split by a faint zebra.
+                panelNode.Color = ShapeStyle.Surface;
+                panelNode.StyleAsPanel();
+                panelNode.Inset = 6;
+                title.StyleAsCardTitle();
+                rows.BackgroundColors = new Color[]
+                {
+                    new Color(255, 255, 255, 7),
+                    Color.Transparent
+                };
+                rows.Scale(0.97f, 0.99f);
+                headings.Scale(0.97f, 1);
+            }
+
             SetHeadingsHeight(0.05f, 0.05f, 40);
 
             eventManager.RaceManager.OnRaceEnd += (Race race) => { Refresh(); };
@@ -199,6 +215,11 @@ namespace UI.Nodes
 
             AlignHorizontally(0.04f, container.Children.ToArray());
 
+            if (ShapeStyle.Modern)
+            {
+                StyleHeadings(headings);
+            }
+
             int index = 0;
             foreach (Pilot p in pilots)
             {
@@ -285,6 +306,35 @@ namespace UI.Nodes
                 headingText.TextNode.Alignment = RectangleAlignment.TopRight;
                 headingText.OnClick += (mie) => { columnToOrderBy = ca; Refresh(); };
                 container.AddChild(headingText);
+            }
+        }
+
+        // Column headings as small, muted labels rather than buttons with a fill.
+        private static void StyleHeadings(Node node)
+        {
+            foreach (Node child in node.Children)
+            {
+                TextButtonNode button = child as TextButtonNode;
+                TextNode text = child as TextNode;
+                if (button != null)
+                {
+                    button.Background = Color.Transparent;
+                    button.TextNode.Tint = ShapeStyle.Muted;
+                    button.TextNode.Style.Bold = true;
+                    RectangleF b = button.TextNode.RelativeBounds;
+                    button.TextNode.RelativeBounds = new RectangleF(b.X, 0.3f, b.Width, 0.4f);
+                }
+                else if (text != null)
+                {
+                    text.Tint = ShapeStyle.Muted;
+                    text.Style.Bold = true;
+                    RectangleF b = text.RelativeBounds;
+                    text.RelativeBounds = new RectangleF(b.X, 0.3f, b.Width, 0.4f);
+                }
+                else
+                {
+                    StyleHeadings(child);
+                }
             }
         }
 
@@ -389,19 +439,76 @@ namespace UI.Nodes
                     positionNode = new TextNode("", Theme.Current.InfoPanel.Text.XNA);
                     positionNode.RelativeBounds = new RectangleF(0, 0, 0.1f, 0.75f);
                     positionNode.Alignment = RectangleAlignment.BottomCenter;
-                    AddChild(positionNode);
+                    if (ShapeStyle.Modern)
+                    {
+                        // The position as a medal badge.
+                        medal = new ColorNode(Color.Transparent);
+                        medal.CornerRadius = 8;
+                        medal.RelativeBounds = new RectangleF(0.02f, 0.14f, 0.06f, 0.72f);
+                        AddChild(medal);
+                        positionNode.RelativeBounds = new RectangleF(0.05f, 0.2f, 0.9f, 0.6f);
+                        positionNode.Alignment = RectangleAlignment.Center;
+                        positionNode.Style.Bold = true;
+                        if (ShapeStyle.NumberFont != null)
+                            positionNode.Style.Font = ShapeStyle.NumberFont;
+                        medal.AddChild(positionNode);
+                    }
+                    else
+                    {
+                        AddChild(positionNode);
+                    }
 
-                    right = positionNode.RelativeBounds.Right;
+                    right = medal != null ? 0.1f : positionNode.RelativeBounds.Right;
                 }
 
                 pilotName = new TextNode("", Theme.Current.InfoPanel.Text.XNA);
                 pilotName.RelativeBounds = new RectangleF(right, 0, 0.2f, 0.75f);
                 pilotName.Alignment = RectangleAlignment.BottomCenter;
+                if (ShapeStyle.Modern)
+                {
+                    pilotName.RelativeBounds = new RectangleF(right + 0.01f, 0.2f, 0.19f, 0.6f);
+                    pilotName.Alignment = RectangleAlignment.CenterLeft;
+                    pilotName.Style.Bold = true;
+                }
                 AddChild(pilotName);
 
                 cont = new Node();
                 cont.RelativeBounds = new RectangleF(pilotName.RelativeBounds.Right, 0, 1 - pilotName.RelativeBounds.Right, pilotName.RelativeBounds.Height);
+                if (ShapeStyle.Modern)
+                {
+                    cont.RelativeBounds = new RectangleF(pilotName.RelativeBounds.Right, 0.2f, 1 - pilotName.RelativeBounds.Right, 0.6f);
+                }
                 AddChild(cont);
+            }
+
+            private ColorNode medal;
+            private int styledCells = -1;
+
+            // Medal colours for the podium, the figure font for every cell.
+            private void StyleModern()
+            {
+                if (medal != null)
+                {
+                    Color fore, back;
+                    switch (position)
+                    {
+                        case 1: fore = new Color(251, 191, 36); back = new Color(251, 191, 36, 40); break;
+                        case 2: fore = new Color(203, 213, 225); back = new Color(203, 213, 225, 36); break;
+                        case 3: fore = new Color(232, 147, 90); back = new Color(232, 147, 90, 40); break;
+                        default: fore = ShapeStyle.Muted; back = new Color(255, 255, 255, 12); break;
+                    }
+                    medal.Color = back;
+                    positionNode.Tint = fore;
+                }
+
+                if (ShapeStyle.NumberFont != null && styledCells != cont.ChildCount)
+                {
+                    styledCells = cont.ChildCount;
+                    foreach (TextNode n in cont.Children.OfType<TextNode>())
+                    {
+                        n.Style.Font = ShapeStyle.NumberFont;
+                    }
+                }
             }
 
             // A pin icon beside the position, for a pilot placed by hand
@@ -579,7 +686,7 @@ namespace UI.Nodes
                         tint = Theme.Current.InCurrentRace.XNA;
                     }
 
-                    if (positionNode != null)
+                    if (positionNode != null && medal == null)
                     {
                         positionNode.Tint = tint;
                     }
@@ -589,6 +696,11 @@ namespace UI.Nodes
                     {
                         n.Tint = tint;
                     }
+                }
+
+                if (ShapeStyle.Modern)
+                {
+                    StyleModern();
                 }
 
                 base.Draw(id, parentAlpha);

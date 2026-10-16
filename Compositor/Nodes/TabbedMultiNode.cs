@@ -173,11 +173,30 @@ namespace Composition.Nodes
             AddChild(tabBack);
         }
 
+        // Draw the strip as one rounded segmented control: a quiet track, the
+        // tabs as pills on it.
+        public void Segmented(Color track, Color ring)
+        {
+            tabBack.Color = track;
+            tabBack.CornerRadius = 12;
+            tabBack.RingColor = ring;
+            tabBack.RingWidth = 1;
+            Padding = 0.004f;
+            segmented = true;
+        }
+
+        private bool segmented;
+
         public TextButtonNode AddTab(string text)
         {
             text = Translator.Get("Button." + text, text);
 
             TextButtonNode textButtonNode = new TextButtonNode(text, ButtonBackground, HoverCover, textColor);
+            if (segmented)
+            {
+                // One text size for every tab, short or long.
+                textButtonNode.TextNode.RelativeBounds = new RectangleF(0.06f, 0.31f, 0.88f, 0.38f);
+            }
             tabBack.AddChild(textButtonNode);
             return textButtonNode;
         }

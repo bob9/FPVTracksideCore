@@ -514,7 +514,18 @@ namespace UI.Nodes
 
         public LapNode(EventManager em, Color channelColor) 
         {
-            imageNode = new ImageNode(@"img/lapbg.png");
+            if (ShapeStyle.Modern)
+            {
+                // A rounded chip faintly tinted with the channel colour.
+                ColorNode chip = new ColorNode(new Color(255, 255, 255, 30));
+                chip.CornerRadius = 6;
+                chip.Inset = 2;
+                imageNode = chip;
+            }
+            else
+            {
+                imageNode = new ImageNode(@"img/lapbg.png");
+            }
             imageNode.KeepAspectRatio = false;
             imageNode.Tint = channelColor;
             AddChild(imageNode);
@@ -522,6 +533,14 @@ namespace UI.Nodes
             textNode = new TextNode("", Theme.Current.TextMain.XNA);
             textNode.Alignment = RectangleAlignment.Center;
             textNode.RelativeBounds = new RectangleF(0.1f, 0, 0.8f, 0.9f);
+            if (ShapeStyle.Modern)
+            {
+                textNode.RelativeBounds = new RectangleF(0.08f, 0.16f, 0.84f, 0.68f);
+                if (ShapeStyle.NumberFont != null)
+                {
+                    textNode.Style.Font = ShapeStyle.NumberFont;
+                }
+            }
 
             imageNode.AddChild(textNode);
 

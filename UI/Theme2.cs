@@ -96,6 +96,9 @@ namespace UI
 
         public TextureColor[] ChannelColors { get; set; }
 
+        // Optional: rounded corners, insets, outlines and shadows (see Composition.ShapeStyle).
+        public ThemeStyle Style { get; set; }
+
         public ToolTexture FPVTracksideLogo { get; set; }
         public ToolTexture PilotProfileMask { get; set; }
         public ToolTexture RaceStartGraphic { get; set; }
@@ -117,6 +120,7 @@ namespace UI
                 theme.Directory = Directory;
 
                 theme.Shadows = Shadows;
+                theme.Style = Style;
                 theme.TopPanelTextBorder = TopPanelTextBorder;
 
                 theme.TextMain = TextMain.ToToolColor(rawTextureCache);
@@ -303,6 +307,11 @@ namespace UI
         public int W { get; set; }
         public int H { get; set; }
 
+        // Optional nine-slice inset in pixels: corners this size are never stretched.
+        [XmlAttribute]
+        [DefaultValue(0)]
+        public int Slice { get; set; }
+
         public TextureRegion()
         {
         }
@@ -313,7 +322,90 @@ namespace UI
 
             Color c = textureCache.GetColor(Filename, r.Center.X, r.Center.Y);
 
-            return new ToolTexture(Filename, c.R, c.G, c.B, c.A, r);
+            return new ToolTexture(Filename, c.R, c.G, c.B, c.A, r) { Slice = Slice };
+        }
+    }
+
+    public class ThemeStyle
+    {
+        [XmlAttribute] public float ButtonRadius { get; set; }
+        [XmlAttribute] public float ButtonInset { get; set; }
+        [XmlAttribute] public float HoverRadius { get; set; }
+        [XmlAttribute] public float HoverInset { get; set; }
+        [XmlAttribute] public float PanelRadius { get; set; }
+        [XmlAttribute] public float PanelShadow { get; set; }
+        [XmlAttribute] public float InputRadius { get; set; }
+        [XmlAttribute] public float RowRadius { get; set; }
+        [XmlAttribute] public float RowInset { get; set; }
+        [XmlAttribute] public float SwatchRadius { get; set; }
+        [XmlAttribute] public float ChipRadius { get; set; }
+        [XmlAttribute] public string Ring { get; set; }
+        [XmlAttribute] public float RingWidth { get; set; }
+        [XmlAttribute] public string ShadowColor { get; set; }
+        [XmlAttribute] public bool Modern { get; set; }
+        [XmlAttribute] public string NumberFont { get; set; }
+        [XmlAttribute] public string Primary { get; set; }
+        [XmlAttribute] public string PrimaryText { get; set; }
+        [XmlAttribute] public string Muted { get; set; }
+        [XmlAttribute] public string Surface { get; set; }
+        [XmlAttribute] public string Elevated { get; set; }
+        [XmlAttribute] public string Danger { get; set; }
+
+        public void Apply()
+        {
+            Composition.ShapeStyle.Reset();
+            Composition.ShapeStyle.ButtonRadius = ButtonRadius;
+            Composition.ShapeStyle.ButtonInset = ButtonInset;
+            Composition.ShapeStyle.HoverRadius = HoverRadius;
+            Composition.ShapeStyle.HoverInset = HoverInset;
+            Composition.ShapeStyle.PanelRadius = PanelRadius;
+            Composition.ShapeStyle.PanelShadow = PanelShadow;
+            Composition.ShapeStyle.InputRadius = InputRadius;
+            Composition.ShapeStyle.RowRadius = RowRadius;
+            Composition.ShapeStyle.RowInset = RowInset;
+            Composition.ShapeStyle.SwatchRadius = SwatchRadius;
+            Composition.ShapeStyle.ChipRadius = ChipRadius;
+            Composition.ShapeStyle.RingWidth = RingWidth;
+
+            Color color;
+            if (TryParse(Ring, out color))
+                Composition.ShapeStyle.Ring = color;
+            if (TryParse(ShadowColor, out color))
+                Composition.ShapeStyle.ShadowColor = color;
+
+            Composition.ShapeStyle.Modern = Modern;
+            Composition.ShapeStyle.NumberFont = string.IsNullOrWhiteSpace(NumberFont) ? null : NumberFont;
+            if (TryParse(Primary, out color))
+                Composition.ShapeStyle.Primary = color;
+            if (TryParse(PrimaryText, out color))
+                Composition.ShapeStyle.PrimaryText = color;
+            if (TryParse(Muted, out color))
+                Composition.ShapeStyle.Muted = color;
+            if (TryParse(Surface, out color))
+                Composition.ShapeStyle.Surface = color;
+            if (TryParse(Elevated, out color))
+                Composition.ShapeStyle.Elevated = color;
+            if (TryParse(Danger, out color))
+                Composition.ShapeStyle.Danger = color;
+        }
+
+        // #RRGGBB or #RRGGBBAA
+        public static bool TryParse(string hex, out Color color)
+        {
+            color = Color.Transparent;
+            if (string.IsNullOrWhiteSpace(hex))
+                return false;
+
+            hex = hex.Trim().TrimStart('#');
+            uint value;
+            if ((hex.Length != 6 && hex.Length != 8) || !uint.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out value))
+                return false;
+
+            if (hex.Length == 6)
+                value = (value << 8) | 0xFF;
+
+            color = new Color((byte)(value >> 24), (byte)(value >> 16), (byte)(value >> 8), (byte)value);
+            return true;
         }
     }
 

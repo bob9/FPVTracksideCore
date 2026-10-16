@@ -45,6 +45,55 @@ namespace UI.Nodes.Rounds
             NeedsInit = true;
             container = new Node();
             AddChild(container);
+
+            if (ShapeStyle.Modern)
+            {
+                // Taller than the classic race, so the rows are big enough to read.
+                AspectRatio = 1.12f;
+
+                // The race is its own card, its heading a title with a status pill.
+                card = new ColorNode(new Color(15, 23, 40));
+                card.CornerRadius = 12;
+                card.RingColor = ShapeStyle.Ring;
+                card.RingWidth = 1;
+                card.Inset = 3;
+                AddChild(card, 0);
+            }
+        }
+
+        private ColorNode card;
+        private StatusPillNode statusPill;
+
+        private void UpdateStatus()
+        {
+            if (card == null)
+                return;
+
+            Race next = EventManager.RaceManager.GetNextRace(true);
+            bool current = next == Race || (EventManager.RaceManager.CurrentRace == Race && !Race.Ended);
+            string text;
+            Color fore, back;
+            if (Race.Ended)
+            {
+                text = "COMPLETE"; fore = new Color(52, 211, 153); back = new Color(52, 211, 153, 26);
+            }
+            else if (Race.Running)
+            {
+                text = "RACING"; fore = new Color(254, 205, 211); back = new Color(244, 63, 94, 40);
+            }
+            else if (current)
+            {
+                text = "NEXT UP"; fore = ShapeStyle.PrimaryText; back = ShapeStyle.Primary;
+            }
+            else
+            {
+                text = "WAITING"; fore = new Color(86, 100, 125); back = new Color(255, 255, 255, 10);
+            }
+            statusPill.Set(text, fore, back);
+
+            bool highlight = current && !Race.Ended;
+            card.RingColor = highlight ? new Color(34, 211, 238, 115) : ShapeStyle.Ring;
+            card.Color = highlight ? new Color(16, 30, 46) : new Color(15, 23, 40);
         }
 
         private void Init()
@@ -73,9 +122,29 @@ namespace UI.Nodes.Rounds
                 heading.RelativeBounds = new RectangleF(0, 0.0f, 1, headingHeight);
                 heading.TextNode.Alignment = RectangleAlignment.BottomLeft;
 
+                if (card != null)
+                {
+                    heading.Background = Color.Transparent;
+                    heading.TextNode.Style.Bold = true;
+                    heading.TextNode.Alignment = RectangleAlignment.CenterLeft;
+                    heading.TextNode.RelativeBounds = new RectangleF(0.05f, 0.24f, 0.56f, 0.6f);
+                    heading.RelativeBounds = new RectangleF(0, 0.015f, 1, headingHeight);
+                    if (statusPill == null)
+                    {
+                        statusPill = new StatusPillNode();
+                        statusPill.RelativeBounds = new RectangleF(0.64f, 0.26f, 0.32f, 0.56f);
+                        heading.AddChild(statusPill);
+                    }
+                    UpdateStatus();
+                }
+
                 float headingBottom = heading.RelativeBounds.Bottom + 0.01f;
 
                 container.RelativeBounds = new RectangleF(0, headingBottom, 1, 1 - headingBottom);
+                if (card != null)
+                {
+                    container.RelativeBounds = new RectangleF(0.03f, headingBottom, 0.94f, 0.97f - headingBottom);
+                }
 
                 List<Channel> channels = EventManager.Channels.Where(c => c != null).ToList();
                 channels.AddRange(Race.Channels.Where(c => c != null && !channels.Contains(c)));
@@ -135,6 +204,10 @@ namespace UI.Nodes.Rounds
 
                 startTimeNode = new TextNode("", Theme.Current.Rounds.Text.XNA);
                 startTimeNode.RelativeBounds = new RectangleF(0.55f, 0.30f, 0.4f, 0.4f);
+                if (card != null)
+                {
+                    startTimeNode.RelativeBounds = new RectangleF(0.36f, 0.34f, 0.3f, 0.4f);
+                }
                 startTimeNode.Alignment = RectangleAlignment.CenterRight;
                 startTimeNode.Alpha = 0.5f;
                 heading.AddChild(startTimeNode);
@@ -665,6 +738,7 @@ namespace UI.Nodes.Rounds
             set
             {
                 resultNode.Text = value;
+                UpdateMedal();
             }
         }
 
@@ -690,6 +764,19 @@ namespace UI.Nodes.Rounds
             pilotNode.PilotNameNode.TextNode.Alignment = RectangleAlignment.CenterLeft;
             pilotNode.ChannelChangeNode.Visible = channelChanged;
 
+            if (ShapeStyle.Modern)
+            {
+                // Channel chip, name, then the result as a medal badge.
+                Color = Color.Transparent;
+                pilotNode.ChannelFirst();
+                pilotNode.RelativeBounds = new RectangleF(0, 0, 0.8f, 1);
+                if (pilot == null)
+                {
+                    pilotNode.PilotNameNode.Text = Translator.Get("Label.OpenSeat", "Open seat");
+                    pilotNode.PilotNameNode.TextNode.Alpha = 0.35f;
+                }
+            }
+
             pilotNode.PilotNameNode.HoverNode.Enabled = false;
             pilotNode.ChannelNode.HoverNode.Enabled = false;
 
@@ -703,7 +790,52 @@ namespace UI.Nodes.Rounds
             resultNode.Alignment = RectangleAlignment.BottomLeft;
             resultNode.Scale(0.9f, 1);
 
+            if (ShapeStyle.Modern)
+            {
+                medal = new ColorNode(Color.Transparent);
+                medal.CornerRadius = 6;
+                medal.RelativeBounds = new RectangleF(0.82f, 0.16f, 0.17f, 0.68f);
+                AddChild(medal);
+
+                resultNode.Remove();
+                resultNode.RelativeBounds = new RectangleF(0.1f, 0.18f, 0.8f, 0.64f);
+                resultNode.Alignment = RectangleAlignment.Center;
+                resultNode.Style.Bold = true;
+                if (ShapeStyle.NumberFont != null)
+                {
+                    resultNode.Style.Font = ShapeStyle.NumberFont;
+                }
+                medal.AddChild(resultNode);
+                return;
+            }
+
             AddChild(resultNode);
+        }
+
+        private ColorNode medal;
+
+        // Gold, silver and bronze for the podium; a quiet badge for the rest.
+        private void UpdateMedal()
+        {
+            if (medal == null)
+                return;
+
+            string text = resultNode.Text ?? "";
+            int position = 0;
+            int i = 0;
+            while (i < text.Length && char.IsDigit(text[i])) i++;
+            if (i > 0) int.TryParse(text.Substring(0, i), out position);
+
+            Color back, fore;
+            switch (position)
+            {
+                case 1: fore = new Color(251, 191, 36); back = new Color(251, 191, 36, 40); break;
+                case 2: fore = new Color(203, 213, 225); back = new Color(203, 213, 225, 36); break;
+                case 3: fore = new Color(232, 147, 90); back = new Color(232, 147, 90, 40); break;
+                default: fore = ShapeStyle.Muted; back = new Color(255, 255, 255, string.IsNullOrEmpty(text) ? 0 : 12); break;
+            }
+            medal.Color = back;
+            resultNode.Tint = fore;
         }
 
         public override bool OnMouseInput(MouseInputEvent mouseInputEvent)

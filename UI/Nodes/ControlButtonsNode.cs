@@ -109,6 +109,34 @@ namespace UI.Nodes
             {
                 ibm.ImageNode.Tint = Theme.Current.RightControls.Text.XNA;
             }
+
+            if (ShapeStyle.Modern)
+            {
+                // Start is the primary action; Stop and Emergency stop read as danger.
+                foreach (IconButtonNode ibm in Children.OfType<IconButtonNode>())
+                {
+                    ibm.Background = Color.Transparent;
+                    ibm.ImageNode.Scale(0.62f);
+                }
+
+                if (ShapeStyle.Primary.A > 0)
+                {
+                    StartButton.Background = ShapeStyle.Primary;
+                    StartButton.ImageNode.Tint = ShapeStyle.PrimaryText;
+                    StartButton.TextNode.Tint = ShapeStyle.PrimaryText;
+                    StartButton.TextNode.Style.Bold = true;
+                }
+
+                Color danger = ShapeStyle.Danger;
+                foreach (IconButtonNode ibm in new IconButtonNode[] { StopButton, EmergencyButton })
+                {
+                    ibm.Background = new Color(danger.R, danger.G, danger.B, (byte)40);
+                    ibm.BackgroundNode.RingColor = new Color(danger.R, danger.G, danger.B, (byte)110);
+                    ibm.BackgroundNode.RingWidth = 1;
+                    ibm.ImageNode.Tint = new Color(254, 205, 211);
+                    ibm.TextNode.Tint = new Color(254, 205, 211);
+                }
+            }
         }
 
 

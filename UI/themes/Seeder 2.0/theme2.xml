@@ -266,6 +266,7 @@
         <Y>343</Y>
       </TextureColor>
     </ChannelColors>
+    <Style ButtonRadius="8" ButtonInset="3" HoverRadius="6" HoverInset="2" PanelRadius="14" PanelShadow="24" InputRadius="6" RowRadius="8" RowInset="2" SwatchRadius="4" ChipRadius="7" Ring="#94A3B81F" RingWidth="1" Modern="true" NumberFont="JetBrains Mono" Primary="#22D3EE" PrimaryText="#031318" Muted="#8A99B3" Surface="#0A101DEB" Elevated="#152036" Danger="#F43F5E" />
     <FPVTracksideLogo R="0" G="0" B="0" A="0" TextureFilename="logo.png">
       <Region>
         <X>0</X>

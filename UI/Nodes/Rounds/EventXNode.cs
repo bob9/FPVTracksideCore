@@ -119,6 +119,15 @@ namespace UI.Nodes.Rounds
             panel.Inner.AddChild(contentContainer);
             UpdateButtons();
 
+            if (ShapeStyle.Modern)
+            {
+                // A card title rather than a coloured band.
+                headingbg.Color = Color.Transparent;
+                heading.Style.Bold = true;
+                heading.RelativeBounds = new RectangleF(0.05f, 0.28f, 0.66f, 0.5f);
+                subHeading.Tint = ShapeStyle.Muted;
+            }
+
             shadow = new ShadowNode();
         }
 

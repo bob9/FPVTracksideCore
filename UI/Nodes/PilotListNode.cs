@@ -38,7 +38,7 @@ namespace UI.Nodes
 
             listNode = new ListNode<PilotChannelNode>(Theme.Current.ScrollBar.XNA);
             listNode.RelativeBounds = new RectangleF(0, 0, 1, 1);
-            listNode.ItemHeight = 30;
+            listNode.ItemHeight = Composition.ShapeStyle.Modern ? 40 : 30;
             listNode.NodeName = "PilotListNode";
 
             instructionNode = new Node();
@@ -110,6 +110,7 @@ namespace UI.Nodes
             pilots.Add(pc.Pilot);
 
             PilotChannelNode pn = new PilotChannelNode(eventManager, Theme.Current.LeftPilotList.Foreground, Theme.Current.Hover.XNA, Theme.Current.LeftPilotList.Text.XNA, Theme.Current.LeftPilotList.Channel);
+            pn.ShowAvatar();
             pn.SetPilotChannel(pc);
             pn.UpdateProfileIcon();
             pn.OnPilotClick += (mie, ap) => 

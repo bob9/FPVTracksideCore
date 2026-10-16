@@ -33,6 +33,9 @@ namespace UI.Nodes
         public AlphaAnimatedNode TabContainer { get; private set; }
 
         private AnimatedRelativeNode logoContainerNode;
+
+        // With a rounded theme each race figure sits on its own chip.
+        private Dictionary<Node, Node> chips = new Dictionary<Node, Node>();
         private Node container;
 
         public TopBarNode()
@@ -92,23 +95,28 @@ namespace UI.Nodes
             type = new EventTypeSummaryNode(EventManager, Theme.Current.TopPanelText.XNA);
             type.Style.Border = border;
             type.AddChild(new HoverNode(Theme.Current.Hover.XNA));
-            lower.AddChild(type);
+            AddFigure(type);
 
             lapSummaryNode = new LapSummaryNode(eventManager, replayNode, Theme.Current.TopPanelText.XNA);
             lapSummaryNode.Alignment = RectangleAlignment.CenterLeft;
             lapSummaryNode.Style.Border = border;
             lapSummaryNode.AddChild(new HoverNode(Theme.Current.Hover.XNA));
-            lower.AddChild(lapSummaryNode);
+            AddFigure(lapSummaryNode);
 
             timeNode = new RaceTimeNode(eventManager.RaceManager, replayNode, Theme.Current.TopPanelText.XNA);
             timeNode.Alignment = RectangleAlignment.CenterLeft;
             timeNode.Style.Border = border;
-            lower.AddChild(timeNode);
+            AddFigure(timeNode);
 
             remainingNode = new RaceTimeRemainingNode(eventManager.RaceManager, replayNode, Theme.Current.TopPanelText.XNA);
             remainingNode.Alignment = RectangleAlignment.CenterLeft;
             remainingNode.Style.Border = border;
-            lower.AddChild(remainingNode);
+            AddFigure(remainingNode);
+
+            if (ShapeStyle.Modern)
+            {
+                BuildModern();
+            }
 
             LogoOnBottomLine(false);
 
@@ -123,10 +131,46 @@ namespace UI.Nodes
             SetAnimationTime(TimeSpan.FromSeconds(ApplicationProfileSettings.Instance.ReOrderAnimationSeconds));
         }
 
+        private void AddFigure(TextNode node)
+        {
+            if (ShapeStyle.Modern)
+            {
+                container.AddChild(node);
+                return;
+            }
+
+            if (ShapeStyle.ChipRadius <= 0)
+            {
+                lower.AddChild(node);
+                return;
+            }
+
+            ColorNode chip = new ColorNode(Theme.Current.PanelAlt.XNA);
+            chip.StyleAsChip();
+            chip.Inset = 3;
+            chip.RingColor = ShapeStyle.Ring;
+            chip.RingWidth = ShapeStyle.RingWidth;
+            lower.AddChild(chip);
+
+            node.Alignment = RectangleAlignment.Center;
+            node.RelativeBounds = new RectangleF(0.06f, 0.2f, 0.88f, 0.6f);
+            chip.AddChild(node);
+            chips[node] = chip;
+        }
+
+        // What is laid out in the bar for a figure: its chip, or the figure itself.
+        private Node Holder(Node node)
+        {
+            Node chip;
+            if (chips.TryGetValue(node, out chip))
+                return chip;
+            return node;
+        }
+
         public void DisableTimeNodes()
         {
-            remainingNode.Visible = false;
-            timeNode.Visible = false;
+            Holder(remainingNode).Visible = false;
+            Holder(timeNode).Visible = false;
         }
 
 
@@ -140,24 +184,123 @@ namespace UI.Nodes
             base.Dispose();
         }
 
+        private RaceStatusNode statusNode;
+        private TextNode timeLabel;
+        private TextNode remainingLabel;
+
+        // The modern header: logo, event, tabs, race state and timers on one row.
+        private void BuildModern()
+        {
+            container.RelativeBounds = new RectangleF(0, 0, 1, 1);
+            container.Remove();
+            AddChild(container, 0);
+
+            TabContainer.Remove();
+            container.AddChild(TabContainer);
+
+            upper.Visible = false;
+            lower.Visible = false;
+
+            ColorNode divider = new ColorNode(new Color(148, 163, 184, 46));
+            divider.RelativeBounds = new RectangleF(0.1265f, 0.3f, 0.0006f, 0.4f);
+            container.AddChild(divider);
+
+            eventName.Remove();
+            container.AddChild(eventName);
+            eventName.Style.Bold = true;
+
+            type.Tint = ShapeStyle.Muted;
+            type.Alignment = RectangleAlignment.CenterLeft;
+
+            lapSummaryNode.Alignment = RectangleAlignment.Center;
+
+            statusNode = new RaceStatusNode(EventManager.RaceManager);
+            container.AddChild(statusNode);
+
+            timeLabel = Label(Translator.Get("Label.RaceTime", "RACE TIME"));
+            remainingLabel = Label(Translator.Get("Label.Remaining", "REMAINING"));
+
+            foreach (RaceTimeNode figure in new RaceTimeNode[] { timeNode, remainingNode })
+            {
+                figure.Prepend = "";
+                figure.Alignment = RectangleAlignment.CenterRight;
+                if (ShapeStyle.NumberFont != null)
+                {
+                    figure.Style.Font = ShapeStyle.NumberFont;
+                }
+            }
+            timeNode.Tint = ShapeStyle.Primary.A > 0 ? ShapeStyle.Primary : Color.White;
+
+            currentTime.Remove();
+            container.AddChild(currentTime);
+            currentTime.Tint = ShapeStyle.Muted;
+            if (ShapeStyle.NumberFont != null)
+            {
+                currentTime.Style.Font = ShapeStyle.NumberFont;
+            }
+        }
+
+        private TextNode Label(string text)
+        {
+            TextNode label = new TextNode(text, ShapeStyle.Muted);
+            label.Alignment = RectangleAlignment.BottomRight;
+            label.Style.Bold = true;
+            container.AddChild(label);
+            return label;
+        }
+
+        private void RepositionModern()
+        {
+            eventName.Visible = ApplicationProfileSettings.Instance.TopEventName;
+            type.Visible = ApplicationProfileSettings.Instance.TopEventType;
+            lapSummaryNode.Visible = ApplicationProfileSettings.Instance.TopLapInfo;
+            timeNode.Visible = timeLabel.Visible = ApplicationProfileSettings.Instance.TopRaceTime;
+            remainingNode.Visible = remainingLabel.Visible = ApplicationProfileSettings.Instance.TopRemainingTime;
+            currentTime.Visible = ApplicationProfileSettings.Instance.TopClock;
+
+            logoContainerNode.RelativeBounds = new RectangleF(0.01f, 0.22f, 0.11f, 0.56f);
+
+            eventName.RelativeBounds = new RectangleF(0.135f, 0.17f, 0.15f, 0.36f);
+            type.RelativeBounds = new RectangleF(0.135f, 0.56f, 0.15f, 0.26f);
+
+            TabContainer.RelativeBounds = new RectangleF(0.27f, 0.16f, 0.43f, 0.68f);
+
+            statusNode.RelativeBounds = new RectangleF(0.708f, 0.27f, 0.062f, 0.46f);
+            lapSummaryNode.RelativeBounds = new RectangleF(0.772f, 0.34f, 0.066f, 0.32f);
+
+            timeLabel.RelativeBounds = new RectangleF(0.838f, 0.16f, 0.05f, 0.18f);
+            timeNode.RelativeBounds = new RectangleF(0.838f, 0.38f, 0.05f, 0.44f);
+            remainingLabel.RelativeBounds = new RectangleF(0.893f, 0.16f, 0.05f, 0.18f);
+            remainingNode.RelativeBounds = new RectangleF(0.893f, 0.38f, 0.05f, 0.44f);
+
+            currentTime.RelativeBounds = new RectangleF(0.948f, 0.38f, 0.046f, 0.26f);
+            RequestLayout();
+        }
+
         public void RepositionNodes()
         {
+            if (statusNode != null)
+            {
+                RepositionModern();
+                return;
+            }
+
             float top = 0.075f;
             float height = 1 - (2 * top);
 
             eventName.Visible = ApplicationProfileSettings.Instance.TopEventName;
-            type.Visible = ApplicationProfileSettings.Instance.TopEventType;
-            lapSummaryNode.Visible = ApplicationProfileSettings.Instance.TopLapInfo;
-            timeNode.Visible = ApplicationProfileSettings.Instance.TopRaceTime;
-            remainingNode.Visible = ApplicationProfileSettings.Instance.TopRemainingTime;
+            Holder(type).Visible = ApplicationProfileSettings.Instance.TopEventType;
+            Holder(lapSummaryNode).Visible = ApplicationProfileSettings.Instance.TopLapInfo;
+            Holder(timeNode).Visible = ApplicationProfileSettings.Instance.TopRaceTime;
+            Holder(remainingNode).Visible = ApplicationProfileSettings.Instance.TopRemainingTime;
             currentTime.Visible = ApplicationProfileSettings.Instance.TopClock;
 
-            type.RelativeBounds = new RectangleF(0, top, 0.37f, height);
-            lapSummaryNode.RelativeBounds = new RectangleF(0, top, 0.18f, height);
-            timeNode.RelativeBounds = new RectangleF(0, top, 0.19f, height);
-            remainingNode.RelativeBounds = new RectangleF(0, top, 0.26f, height);
+            Holder(type).RelativeBounds = new RectangleF(0, top, 0.37f, height);
+            Holder(lapSummaryNode).RelativeBounds = new RectangleF(0, top, 0.18f, height);
+            Holder(timeNode).RelativeBounds = new RectangleF(0, top, 0.19f, height);
+            Holder(remainingNode).RelativeBounds = new RectangleF(0, top, 0.26f, height);
 
-            Node[] ordered = new Node[] { type, lapSummaryNode, timeNode, remainingNode };
+            Node[] ordered = new Node[] { Holder(type), Holder(lapSummaryNode), Holder(timeNode), Holder(remainingNode) };
 
             float current = 0f;
             foreach (Node node in ordered)
@@ -205,6 +348,13 @@ namespace UI.Nodes
 
         public void LogoOnBottomLine(bool bottom)
         {
+            if (statusNode != null)
+            {
+                // The modern header keeps its layout; only the tabs come and go.
+                TabContainer.SetAnimatedVisibility(!bottom);
+                return;
+            }
+
             if (bottom)
             {
                 TabContainer.SetAnimatedVisibility(false);

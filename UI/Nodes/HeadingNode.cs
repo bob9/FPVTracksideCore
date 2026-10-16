@@ -31,5 +31,14 @@ namespace UI.Nodes
             title.RelativeBounds = new RectangleF(0.05f, 0.07f, 0.9f, 0.9f);
             AddChild(title);
         }
+
+        // A card title: no band behind it, bold, a little smaller.
+        public void StyleAsCardTitle()
+        {
+            Color = Color.Transparent;
+            title.Style.Bold = true;
+            title.Alignment = RectangleAlignment.CenterLeft;
+            title.RelativeBounds = new RectangleF(0.02f, 0.2f, 0.9f, 0.6f);
+        }
     }
 }

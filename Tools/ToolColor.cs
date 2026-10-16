@@ -99,6 +99,10 @@ namespace Tools
 
         public Rectangle Region { get; set; }
 
+        // Nine-slice inset in source pixels: corners this size keep their shape.
+        [XmlIgnore]
+        public int Slice { get; set; }
+
         public ToolTexture()
         {
             Region = new Rectangle();

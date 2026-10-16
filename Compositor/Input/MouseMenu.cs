@@ -46,6 +46,8 @@ namespace Composition.Input
             }
         }
 
+        private Color itemBackground;
+
         public MouseMenu(Node creator)
             :this(creator.GetLayer<MenuLayer>())
         {
@@ -58,6 +60,20 @@ namespace Composition.Input
             listNode = new ListNode<MenuItem>(MenuLayer.ScrollBar);
             listNode.ShrinkContentsForScrollers = false;
 
+            // A rounded theme draws the menu as one card, its items as hovers on it.
+            if (ShapeStyle.PanelRadius > 0)
+            {
+                ColorNode card = new ColorNode(MenuLayer.Background);
+                card.StyleAsPanel();
+                card.CornerRadius = Math.Min(ShapeStyle.PanelRadius, 10);
+                AddChild(card);
+                itemBackground = Color.Transparent;
+            }
+            else
+            {
+                itemBackground = MenuLayer.Background;
+            }
+
             AddChild(listNode);
 
             AnimationTime = TimeSpan.FromSeconds(0.1f);
@@ -69,7 +85,10 @@ namespace Composition.Input
             listNode.ItemPadding = 0;
 
             WidthPerChar = 12;
-            AddChild(new ShadowNode());
+            if (ShapeStyle.PanelRadius <= 0)
+            {
+                AddChild(new ShadowNode());
+            }
 
             EdgePadding = 5;
         }
@@ -139,7 +158,7 @@ namespace Composition.Input
             }
             childMenus.Add(submenu);
 
-            MenuItem newItem = new MenuItem(text + " >>", MenuLayer.Background, MenuLayer.Hover, MenuLayer.Text);
+            MenuItem newItem = new MenuItem(text + " >>", itemBackground, MenuLayer.Hover, MenuLayer.Text);
             newItem.TextNode.Alignment = RectangleAlignment.CenterLeft;
             newItem.OnClick += (mie) =>
             {
@@ -157,7 +176,7 @@ namespace Composition.Input
         {
             text = Translator.Get("Menu." + text, text);
 
-            MenuItem newItem = new MenuItem(text, MenuLayer.Background, MenuLayer.Hover, MenuLayer.Text);
+            MenuItem newItem = new MenuItem(text, itemBackground, MenuLayer.Hover, MenuLayer.Text);
             newItem.TextNode.Alignment = RectangleAlignment.CenterLeft;
             newItem.OnClick += (mie) =>
             {
@@ -172,7 +191,7 @@ namespace Composition.Input
         {
             text = Translator.Get("Menu." + text, text);
 
-            CheckboxMenuItem newItem = new CheckboxMenuItem(text, MenuLayer.Background, MenuLayer.Hover, MenuLayer.Text, value);
+            CheckboxMenuItem newItem = new CheckboxMenuItem(text, itemBackground, MenuLayer.Hover, MenuLayer.Text, value);
             newItem.TextNode.Alignment = RectangleAlignment.CenterLeft;
             newItem.OnClick += (mie) =>
             {
@@ -204,7 +223,7 @@ namespace Composition.Input
         {
             text = Translator.Get("Menu." + text, text);
 
-            MenuItem newItem = new MenuItem(text, MenuLayer.Background, MenuLayer.Hover, MenuLayer.Text);
+            MenuItem newItem = new MenuItem(text, itemBackground, MenuLayer.Hover, MenuLayer.Text);
             newItem.TextNode.Alignment = RectangleAlignment.CenterLeft;
             newItem.OnClick += (mie) =>
             {

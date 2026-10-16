@@ -54,6 +54,9 @@ namespace Composition.Nodes
 
             HoverNode = new HoverNode(hover);
             AddChild(HoverNode);
+
+            BackgroundNode.StyleAsButton();
+            HoverNode.Shape.StyleAsButton();
         }
 
         protected override string GetNodeName()

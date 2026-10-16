@@ -100,6 +100,59 @@ namespace Tools
             return texture;
         }
 
+        public static Texture2D CreateShapeTexture(GraphicsDevice graphicsDevice, int radius, int ring, int blur)
+        {
+            radius = Math.Max(0, radius);
+            blur = Math.Max(0, blur);
+            int corner = radius + blur;
+            int size = corner * 2 + 2;
+
+            Texture2D texture = new Texture2D(graphicsDevice, size, size);
+            Color[] data = new Color[size * size];
+
+            float half = size / 2.0f;
+            // The shape fills the texture less the soft edge.
+            float halfShape = half - blur;
+
+            for (int y = 0; y < size; y++)
+            {
+                for (int x = 0; x < size; x++)
+                {
+                    // Signed distance from the edge of the rounded box: negative inside.
+                    float px = Math.Abs(x + 0.5f - half) - (halfShape - radius);
+                    float py = Math.Abs(y + 0.5f - half) - (halfShape - radius);
+                    float ox = Math.Max(px, 0);
+                    float oy = Math.Max(py, 0);
+                    float distance = (float)Math.Sqrt(ox * ox + oy * oy) + Math.Min(Math.Max(px, py), 0) - radius;
+
+                    float a;
+                    if (blur > 0)
+                    {
+                        // Shadow: full inside, easing to nothing across the blur.
+                        float t = Math.Clamp((distance + blur * 0.5f) / blur, 0, 1);
+                        a = 1 - t;
+                        a = a * a * (3 - 2 * a);
+                    }
+                    else if (ring > 0)
+                    {
+                        float outer = Math.Clamp(0.5f - distance, 0, 1);
+                        float inner = Math.Clamp(0.5f - (distance + ring), 0, 1);
+                        a = outer - inner;
+                    }
+                    else
+                    {
+                        a = Math.Clamp(0.5f - distance, 0, 1);
+                    }
+
+                    byte b = (byte)Math.Round(a * 255);
+                    data[y * size + x] = new Color(b, b, b, b);
+                }
+            }
+
+            texture.SetData(data);
+            return texture;
+        }
+
         public static Texture2D CreateTintTexture(Texture2D texture, Color tint)
         {
             Vector4 tintV = tint.ToVector4();

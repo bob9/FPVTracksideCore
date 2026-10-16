@@ -174,6 +174,7 @@ namespace UI.Nodes
             heading.RelativeBounds = new RectangleF(0, 1 - headingHeight, 1, headingHeight);
 
             panelTop = new ColorNode(Theme.Current.EventSelectorTop);
+            panelTop.CornerRadius = Math.Max(0, Composition.ShapeStyle.PanelRadius - 4);
             panelTop.RelativeBounds = new RectangleF(0, 0, 1, 1 - headingHeight);
             mainDock.Top.AddChild(panelTop);
 

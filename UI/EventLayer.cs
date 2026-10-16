@@ -201,8 +201,13 @@ namespace UI
 
             EventManager.OnPilotRefresh += OnPilotRefresh;
 
+            if (ShapeStyle.Modern)
+            {
+                rightBarWidth = 0.046f;
+            }
+
             topBar = new TopBarNode();
-            topBar.RelativeBounds = new RectangleF(0, 0, 1, 0.13f); 
+            topBar.RelativeBounds = new RectangleF(0, 0, 1, ShapeStyle.Modern ? 0.072f : 0.13f); 
             Root.AddChild(topBar);
 
             rightBar = new AnimatedNode();
@@ -217,6 +222,13 @@ namespace UI
 
             ColorNode rightSideColor = new ColorNode(Theme.Current.RightControls.Background);
             rightBar.AddChild(rightSideColor);
+            if (ShapeStyle.Modern)
+            {
+                // The controls sit on their own card, clear of the edges.
+                rightSideColor.Color = ShapeStyle.Surface;
+                rightSideColor.StyleAsPanel();
+                rightSideColor.Inset = 8;
+            }
                         
             mainContainer = new Node();
             mainContainer.RelativeBounds = new RectangleF(0, topBar.RelativeBounds.Bottom, 1, 1 - topBar.RelativeBounds.Bottom);
@@ -228,6 +240,15 @@ namespace UI
 
             pilotList = new PilotListNode(EventManager);
             leftContainer.AddChild(pilotList);
+
+            if (ShapeStyle.Modern)
+            {
+                // The pilot list is a card with a gutter round it.
+                leftBg.Color = ShapeStyle.Surface;
+                leftBg.StyleAsPanel();
+                leftBg.Inset = 8;
+                pilotList.RelativeBounds = new RectangleF(0.06f, 0.02f, 0.88f, 0.96f);
+            }
 
             pilotList.OnPilotClick += PilotList_OnPilotClick;
             pilotList.OnPilotChannelClick += PilotList_OnPilotChannelClick;
@@ -250,6 +271,10 @@ namespace UI
 
             tabButtonsNode = new TabButtonsNode(Theme.Current.Tabs.Background, Theme.Current.Tabs.Foreground, Theme.Current.Hover.XNA, Theme.Current.Tabs.Text.XNA);
             Theme.Current.ApplySelected(tabButtonsNode);
+            if (ShapeStyle.Modern)
+            {
+                tabButtonsNode.Segmented(ShapeStyle.Surface, ShapeStyle.Ring);
+            }
             pilotListButton = tabButtonsNode.AddTab("Pilots");
             pilotListButton.OnClick += TogglePilotList;
             OnPilotRefresh();

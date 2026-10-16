@@ -269,6 +269,12 @@ namespace Webb
                         if (target == eventsPath || string.IsNullOrEmpty(target))
                             target = eventRoot.FullName;
 
+                        if (!WebFileGuard.IsInside(target, eventsPath))
+                        {
+                            context.Response.StatusCode = 404;
+                            return new byte[0];
+                        }
+
                         if (target.Contains("."))
                         {
                             if (File.Exists(target))
@@ -306,6 +312,12 @@ namespace Webb
 
 
             FileInfo file = new FileInfo(IOTools.ResolveFromWorkingDirectory(requestPath));
+            string webRoot = IOTools.WorkingDirectory?.FullName ?? Directory.GetCurrentDirectory();
+            if (!WebFileGuard.MayServe(file.FullName, webRoot))
+            {
+                context.Response.StatusCode = 404;
+                return new byte[0];
+            }
 
 #if DEBUG
             // Deliberately left relative to the current directory: this walks up out of the

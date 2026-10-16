@@ -105,6 +105,8 @@ A caller gets a role in one of these ways:
 
 `GET /api/v1` and `GET /api/v1/auth/me` say who the caller is (`signedInAs`, `role`). Passwords are stored as PBKDF2 hashes and keys as SHA-256 hashes in `WebUsers.json` in FPVTrackside's folder; neither can be read back. Sign-ins, failed sign-ins and user changes are written to the HTTP log.
 
+The web server doesn't hand out the `data` and `log` folders, settings (`.xml`) files outside `themes`, or `WebUsers.json`, and requests can't reach files outside FPVTrackside's folder.
+
 Tokens and keys are only ever sent in the `Authorization` header (or `X-Api-Token`), never in a cookie, so another website can't make a browser send them.
 
 There is no HTTPS: FPVTrackside's web server is plain HTTP, so passwords and tokens cross the network unencrypted. Keep it on the venue network; for access from outside, put it behind a VPN or an HTTPS reverse proxy.
